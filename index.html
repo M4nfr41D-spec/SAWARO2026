@@ -139,7 +139,7 @@ window.SAWARO_NAV_ICON={"dashboard": "home", "sos": "siren", "calendar": "calend
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0f0f0f">
-<title>SAWARO26 · COMMANDER D26 · v164 Kalender → Salesforce Direct</title>
+<title>SAWARO26 · COMMANDER D26 · v165 Account Modal + Report Source Fix</title>
 <script>document.documentElement.classList.add('sawaro-booting');</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -1041,7 +1041,7 @@ input { font-family: inherit; }
    ═══════════════════════════════════════ */
 .modal-overlay {
   display: none;
-  position: fixed; inset: 0; z-index: 200;
+  position: fixed; inset: 0; z-index: 1200;
   background: rgba(0,0,0,.78);
   backdrop-filter: blur(8px) saturate(160%);
   align-items: flex-start; justify-content: center;
@@ -1087,6 +1087,7 @@ input { font-family: inherit; }
   padding: 22px 24px;
   border-bottom: 1px solid var(--b0);
   background: linear-gradient(180deg, #1c1c1c, #181818);
+  position: sticky; top: 0; z-index: 20;
 }
 .m-acct-info { min-width: 0; }
 .m-acct-name {
@@ -4686,7 +4687,7 @@ const CONFIG = {
   PASSWORD: '1234',
   AUTH_ENABLED: false,   // v150: Gate laeuft ueber den Boot-Startscreen (#sawaroBoot)
   YEARS: ['14','15','16','17','18','19','20','21','22','23','24','25','FY26'],
-  VERSION: 'SAWARO26 COMMANDER D26 · v164 KALENDER SALESFORCE DIRECT · AUDIT SAFE',
+  VERSION: 'SAWARO26 COMMANDER D26 · v165 ACCOUNT MODAL + REPORT SOURCE FIX · AUDIT SAFE',
 };
 
 const ORIGIN_MAP = {
@@ -5707,6 +5708,7 @@ const renderTable = () => {
         _rra.style.cssText = 'display:flex;gap:5px;margin-top:6px;flex-wrap:wrap';
         const _chip = 'font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:3px 8px;border-radius:6px;background:rgba(130,232,79,.12);color:#82e84f;border:1px solid rgba(130,232,79,.3);cursor:pointer;min-height:24px;line-height:1';
         _rra.innerHTML =
+          '<button type="button" data-rra="detail" title="Kundenanalyse mit Preis-, Mengen- und Artikeldetails" style="'+_chip+'">DETAIL</button>' +
           '<button type="button" data-rra="exc" title="Executive Report" style="'+_chip+'">EXC</button>' +
           '<button type="button" data-rra="cpr" title="Call Preparation Report" style="'+_chip+'">CPR</button>' +
           '<button type="button" data-rra="car" title="Customer Article Report" style="'+_chip+'">CAR</button>';
@@ -5715,7 +5717,8 @@ const renderTable = () => {
           e.stopPropagation();
           STATE.current = a;
           const _k = _b.getAttribute('data-rra');
-          if (_k === 'exc') openPrint('excr');
+          if (_k === 'detail') openModal(a);
+          else if (_k === 'exc') openPrint('excr');
           else if (_k === 'cpr') openPrint('cpr');
           else openArticleNavigator('customer', a.name || '', a);
         });
@@ -6388,7 +6391,26 @@ const clearArticlePrintingState = () => {
   if (artOverlay) artOverlay.classList.remove('printing-article');
 };
 
-const territoryAccounts = () => getFiltered();
+const reportScopeAccounts = () => {
+  const adv = STATE.adv || {};
+  return (Array.isArray(STATE.accounts) ? STATE.accounts : []).filter(a => {
+    if (adv.country && String(a.country || '') !== adv.country) return false;
+    if (adv.segment && String(a.segment || '') !== adv.segment) return false;
+    if (adv.origin && getAccountOrigin(a) !== adv.origin) return false;
+    if (adv.pattern && String(a.pattern || '') !== adv.pattern) return false;
+    return true;
+  }).slice().sort((a,b) => String(a.name||'').localeCompare(String(b.name||'')));
+};
+const reportScopeSummary = () => {
+  const adv = STATE.adv || {};
+  const parts = [];
+  if (adv.country) parts.push('Land ' + adv.country);
+  if (adv.segment) parts.push('Segment ' + adv.segment);
+  if (adv.origin) parts.push(ORIGIN_MAP[adv.origin]?.label || adv.origin);
+  if (adv.pattern) parts.push('Demand ' + adv.pattern);
+  return parts.length ? parts.join(' · ') : 'Gesamtgebiet AT/HR/SI';
+};
+const territoryAccounts = () => reportScopeAccounts();
 const buildAggregateReportChart = (data, title = 'Umsatztrend + Forecast') => {
   const p = aggregatePortfolio(data);
   const pts = CONFIG.YEARS.slice(0,12).map((y,i)=>[y, p.totals[i] || 0, 'hist']).concat([['OB26', p.ob26, 'ob'], ['FY26', p.fy26, 'fy']]);
@@ -6434,7 +6456,7 @@ const buildTerritoryReport = () => {
   if (!data.length) { toast('Keine Accounts für den Territory Report gefunden', 'err'); return; }
   const p = aggregatePortfolio(data);
   const rows = accountImpactRows(data);
-  const scope = updateFilterSummary(true);
+  const scope = reportScopeSummary();
   const country = STATE.adv.country || 'Alle Länder';
   const stamp = reportDateStamp();
   const title = `Territory Report Out · ${scope}`;
@@ -8959,7 +8981,7 @@ window.addEventListener('load', () => {
 
 /* --- Strategic Review bridge: expose core fns to window --- */
 try{
-  if(typeof territoryAccounts==='function') window.__SR_territoryAccounts=territoryAccounts;
+  if(typeof territoryAccounts==='function') window.__SR_territoryAccounts=function(){return (window.STATE&&Array.isArray(window.STATE.accounts))?window.STATE.accounts:[];};
   if(typeof aggregateTargetLayer==='function') window.__SR_aggregateTargetLayer=aggregateTargetLayer;
   if(typeof openReportHtml==='function') window.__SR_openReportHtml=openReportHtml;
   if(typeof accountForecastBreakdownFY26==='function') window.__SR_fc=accountForecastBreakdownFY26;
@@ -9074,7 +9096,7 @@ try{window.accountRuntimeStatus=accountRuntimeStatus;}catch(e){}
     try{
       var data=territoryAccounts();
       if(!data.length){ if(typeof toast==='function') toast('Keine Accounts für den Territory Report gefunden','err'); return; }
-      var p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=updateFilterSummary(true), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
+      var p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=reportScopeSummary(), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
       var body='<div class="report-sheet"><div class="report-hero"><div><div class="report-eyebrow">TRR · Territory Report</div><div class="report-title-main">'+reportSafe(title)+'</div><div class="report-meta-line">Territory: '+reportSafe(scope)+' · '+reportGeneratedLine(stamp)+'</div><div class="report-meta-line">Gebietsübersicht zu Umsatzhistorie, FY26-Sichtbarkeit, Forecast, LRP-Abdeckung und Account-Risiken.</div></div><div class="report-badge-stack"><div class="report-badge">Territory</div><div class="report-badge '+(p.delta<0?'warn':'')+'">'+(p.delta>=0?'Momentum positiv':'Momentum negativ')+'</div></div></div><div class="report-grid-kpi"><div class="report-kpi"><div class="report-kpi-l">Accounts</div><div class="report-kpi-v">'+fmt.num(data.length)+'</div><div class="report-kpi-sub">Gebiet / Auswahl</div></div><div class="report-kpi"><div class="report-kpi-l">Umsatz 2025</div><div class="report-kpi-v hi">'+fmt.full(p.r25)+'</div><div class="report-kpi-sub">Ist / Historie</div></div><div class="report-kpi"><div class="report-kpi-l">OB26</div><div class="report-kpi-v hi">'+fmt.full(p.ob26)+'</div><div class="report-kpi-sub">Pipeline-Floor</div></div><div class="report-kpi"><div class="report-kpi-l">FY26 Forecast</div><div class="report-kpi-v hi">'+fmt.full(p.fy26)+'</div><div class="report-kpi-sub">Trend + Orderbook</div></div><div class="report-kpi"><div class="report-kpi-l">Forecast Δ</div><div class="report-kpi-v '+(p.delta<0?'warn':'hi')+'">'+fmt.full(p.delta)+'</div><div class="report-kpi-sub">FY26 vs. 2025</div></div><div class="report-kpi"><div class="report-kpi-l">Revenue at Risk</div><div class="report-kpi-v risk">'+fmt.full(p.riskExposure)+'</div><div class="report-kpi-sub">High Risk / Drop</div></div></div><div class="report-clarity-note"><b>Forecast-Transparenz:</b> FY26 Forecast ist keine fixe Bestellung. 2026 sichtbar = TO_ORDB Turnover YTD + Open OB26; 2025 bleibt Referenzwert. Δ vs. 2025 zeigt die Modellabweichung, Open Gap ist noch nicht im Orderbook abgesichert.</div><div class="report-section"><div class="report-section-title">Gesamtumsatz · Risikoentwicklung · Forecast</div><div class="report-forecast-grid">'+buildAggregateReportChart(data,'Territory Umsatzentwicklung 2014–FY26')+'<div class="report-forecast-table"><div class="report-mini-row"><span>Visible/FY Coverage</span><b class="'+(p.fy26&&p.ob26/p.fy26<.65?'warn':'hi')+'">'+(p.fy26?reportPct(p.ob26/p.fy26):'–')+'</b></div><div class="report-mini-row"><span>Offene FY26-Lücke</span><b class="'+(Math.max(0,p.fy26-p.ob26)>0?'warn':'hi')+'">'+fmt.full(Math.max(0,p.fy26-p.ob26))+'</b></div><div class="report-mini-row"><span>Top Negativ / Positiv</span><b>'+rows.filter(function(x){return x.delta<0}).length+' / '+rows.filter(function(x){return x.delta>0}).length+'</b></div><div class="report-mini-row"><span>Methodik</span><b>2014–2025 Historie · TO_ORDB YTD + Open OB Floor</b></div></div></div></div>'+v83CompensationBridge(data,rows,p)+renderTargetReportBlock(data,'Territory / Segment LRP Target Gap')+renderRadarReportBlock(data,'RADAR Findings · Current Report Scope')+renderSOSReportBlock(data,'SOS Follow-up · Current Report Scope')+'<div class="report-section"><div class="report-section-title">Risk Exposure</div>'+renderTerritoryRisk(data)+'</div><div class="report-section"><div class="report-section-title">Top 10 negative FY26 Δ vs. 2025</div>'+renderAccountImpactTable(rows,'neg')+'</div><div class="report-section"><div class="report-section-title">Top 10 positive FY26 Δ vs. 2025</div>'+renderAccountImpactTable(rows,'pos')+'</div>'+reportFooter('TRR',scope,stamp)+'</div>';
       openReportHtml('TRR · Territory Report',country,body);
     }catch(err){ console.error('v83 territory report failed',err); if(typeof toast==='function') toast('Territory Report v83 konnte nicht erstellt werden','err'); }
@@ -9271,7 +9293,7 @@ try{window.accountRuntimeStatus=accountRuntimeStatus;}catch(e){}
     try{
       var data=territoryAccounts();
       if(!data.length){ if(typeof toast==='function') toast('Keine Accounts für den Territory Report gefunden','err'); return; }
-      var p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=updateFilterSummary(true), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
+      var p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=reportScopeSummary(), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
       var summary=rowSummary(rows);
       var body='<div class="report-sheet"><div class="report-hero"><div><div class="report-eyebrow">TRR · Territory Report</div><div class="report-title-main">'+reportSafe(title)+'</div><div class="report-meta-line">Territory: '+reportSafe(scope)+' · '+reportGeneratedLine(stamp)+'</div><div class="report-meta-line">Scope: Gesamtgebiet / Länder / Hauptsegmente mit Umsatzhistorie, FY26 sichtbar, Forecast und Kompensationseffekt</div></div><div class="report-badge-stack"><div class="report-badge">Territory</div><div class="report-badge '+(p.delta<0?'warn':'')+'">'+(p.delta>=0?'Momentum positiv':'Momentum negativ')+'</div></div></div>'+
       '<div class="report-grid-kpi"><div class="report-kpi"><div class="report-kpi-l">Accounts</div><div class="report-kpi-v">'+fmt.num(data.length)+'</div><div class="report-kpi-sub">Gebiet / Auswahl</div></div><div class="report-kpi"><div class="report-kpi-l">Umsatz 2025</div><div class="report-kpi-v hi">'+fmt.full(p.r25)+'</div><div class="report-kpi-sub">Ist / Historie</div></div><div class="report-kpi"><div class="report-kpi-l">OB26</div><div class="report-kpi-v hi">'+fmt.full(p.ob26)+'</div><div class="report-kpi-sub">Pipeline-Floor</div></div><div class="report-kpi"><div class="report-kpi-l">FY26 Forecast</div><div class="report-kpi-v hi">'+fmt.full(p.fy26)+'</div><div class="report-kpi-sub">Trend + Orderbook</div></div><div class="report-kpi"><div class="report-kpi-l">Forecast Δ</div><div class="report-kpi-v '+(p.delta<0?'warn':'hi')+'">'+fmt.full(p.delta)+'</div><div class="report-kpi-sub">FY26 vs. 2025</div></div><div class="report-kpi"><div class="report-kpi-l">Revenue at Risk</div><div class="report-kpi-v risk">'+fmt.full(p.riskExposure)+'</div><div class="report-kpi-sub">High Risk / Drop</div></div></div>'+
@@ -9420,7 +9442,7 @@ try{window.accountRuntimeStatus=accountRuntimeStatus;}catch(e){}
   function buildReportV85(){
     try{
       const data=territoryAccounts(); if(!data.length){ if(typeof toast==='function') toast('Keine Accounts für den Territory Report gefunden','err'); return; }
-      const p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=updateFilterSummary(true), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
+      const p=aggregatePortfolio(data), rows=accountImpactRows(data), scope=reportScopeSummary(), country=(STATE.adv&&STATE.adv.country)||'Alle Länder', stamp=reportDateStamp(), title='Territory Report Out · '+scope;
       const summary=rowSummary(rowsFor(data));
       const v85Concl=(function(){try{
         var n=data.length, dPct=p.r25>0?(p.delta/p.r25*100):0;
@@ -10544,7 +10566,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 
   // ---- safe accessors to existing engine (via window bridge) ----
   const W = (typeof window!=='undefined')?window:{};
-  function _accounts(){ try{ const f=W.__SR_territoryAccounts||(typeof territoryAccounts==='function'?territoryAccounts:null); return f?f():[]; }catch(e){ return []; } }
+  function _accounts(){ try{ const a=W.STATE&&W.STATE.accounts; if(Array.isArray(a)) return a; const f=W.__SR_territoryAccounts||(typeof territoryAccounts==='function'?territoryAccounts:null); return f?f():[]; }catch(e){ return []; } }
   function _fc(a){ try{ const f=W.__SR_fc||(typeof accountForecastBreakdownFY26==='function'?accountForecastBreakdownFY26:null); return f?(f(a)||{}):{}; }catch(e){ return {}; } }
   function _bench(a,fc){ try{ const f=W.__SR_bench||(typeof snapshotBenchmarkFY26==='function'?snapshotBenchmarkFY26:null); return f?(f(a,fc)||{}):{}; }catch(e){ return {}; } }
   function _seg(a){ try{ const f=W.__SR_seg||(typeof resolveMainSegment==='function'?resolveMainSegment:null); return f?f(a):((a&&(a.mainSegment||a.segment))||'Unassigned'); }catch(e){ return (a&&(a.mainSegment||a.segment))||'Unassigned'; } }
@@ -12729,11 +12751,11 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
 <script id="sawaro-v134-commandroom-js">
 (function(){
   'use strict';
-  var BUILD='v146';
-  var BUILD_LABEL='SAWARO26 COMMANDER D26 · v164 KALENDER SALESFORCE DIRECT';
+  var BUILD='v165';
+  var BUILD_LABEL='SAWARO26 COMMANDER D26 · v165 ACCOUNT MODAL + REPORT SOURCE FIX';
   var BUILD_DATE='2026-06-08';
   var OWNER='Ing. Manfred Foissner';
-  var PATCH_NAME='Command Entry Hardening';
+  var PATCH_NAME='Account Modal + Report Source Fix';
 
   function byId(id){return document.getElementById(id)}
   function q(sel,root){return (root||document).querySelector(sel)}
@@ -13053,7 +13075,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
 
 
 <!--
-SAWARO26 v164 KALENDER → SALESFORCE DIRECT · PATCH CANDIDATE
+SAWARO26 v165 ACCOUNT MODAL + REPORT SOURCE FIX · PATCH CANDIDATE
 Baseline runtime: SAWARO26_COMMANDER_v156_SOSX_RUNTIME_FLOW_FIX.html · SHA-256 88c9651a7e6fcf921034a5a1328c1d4764fb0943579bebb2c0b79d0b11dc2d9c
 Report/card donor: Ok SAWARO26_COMMANDER_v158_SOSX_OUTCOME_NOTE_CARDS.html · SHA-256 24f717d2501699bd51b0ee7061d135311384f928372d8f4ca881986e9de127f8
 Changed: unified report presentation, Outcome Note cards, external-clean report exports, explicit outcome logic, dynamic report filenames, monthly no-data state.
@@ -13159,13 +13181,21 @@ Rollback: SAWARO26_COMMANDER_v156_SOSX_RUNTIME_FLOW_FIX.html
 </script>
 
 <!--
-SAWARO26 v164 KALENDER → SALESFORCE DIRECT
+SAWARO26 v165 ACCOUNT MODAL + REPORT SOURCE FIX
 Baseline: v159 Runtime + Report Merge
 Scope:
 - Intake keeps explicit SOS + Calendar transfer.
 - Existing SOS/action cards remain unchanged.
 - Salesforce Event link appears only inside Action Detail after opening the action from Calendar.
 - Real anchor navigation; no clipboard fallback, no popup-copy workaround, no new modal/card/workspace.
+-->
+
+<!--
+SAWARO26 v165 CHANGELOCK
+Baseline: v164 Kalender -> Salesforce Direct
+Changed: customer modal z-layer/sticky close; explicit DETAIL entry on existing account rows/cards; Reporting scope ignores global master search; Strategic Review uses all loaded accounts and its own composer territory scope.
+Protected and untouched: Truth/import, turnover/orderbook/LRP, forecast model, SOS/calendar cap-4, Salesforce desktop link, SOS reports, backup/restore.
+Rollback: use v164 baseline.
 -->
 </body>
 </html>
