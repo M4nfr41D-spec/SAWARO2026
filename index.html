@@ -139,7 +139,7 @@ window.SAWARO_NAV_ICON={"dashboard": "home", "sos": "siren", "calendar": "calend
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0f0f0f">
-<title>SAWARO26 · COMMANDER D26 · v165 Account Modal + Report Source Fix</title>
+<title>SAWARO26 · COMMANDER D26 · v167 Canonical Truth Contract</title>
 <script>document.documentElement.classList.add('sawaro-booting');</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -4687,7 +4687,7 @@ const CONFIG = {
   PASSWORD: '1234',
   AUTH_ENABLED: false,   // v150: Gate laeuft ueber den Boot-Startscreen (#sawaroBoot)
   YEARS: ['14','15','16','17','18','19','20','21','22','23','24','25','FY26'],
-  VERSION: 'SAWARO26 COMMANDER D26 · v165 ACCOUNT MODAL + REPORT SOURCE FIX · AUDIT SAFE',
+  VERSION: 'SAWARO26 COMMANDER D26 · v167 CANONICAL TRUTH CONTRACT · AUDIT SAFE',
 };
 
 const ORIGIN_MAP = {
@@ -4778,10 +4778,11 @@ const fmtGap = (base, value) => {
 };
 const aggregateVisibilityV66 = (data = []) => {
   const rows = data || [];
-  const to26 = rows.reduce((s,a)=>s + (Number(a.turnoverYTD26)||0), 0);
-  const open = rows.reduce((s,a)=>s + (Number(a.orderbookOpen26)||0), 0);
-  const visible = rows.reduce((s,a)=>s + (Number(a.fy26Visible ?? (a.rev||[])[12])||0), 0) || (to26 + open);
-  const r25 = rows.reduce((s,a)=>s + (Number((a.rev||[])[11])||0), 0);
+  const truths = rows.map(getAccountTruth);
+  const to26 = truths.reduce((s,t)=>s + t.monthlyUpdatedYtdTurnover, 0);
+  const open = truths.reduce((s,t)=>s + t.monthlyUpdatedOpenOrderbook, 0);
+  const visible = truths.reduce((s,t)=>s + t.visible2026, 0);
+  const r25 = truths.reduce((s,t)=>s + t.historicalTurnover2025, 0);
   const fcRows = rows.map(a => accountForecastBreakdownFY26(a));
   const forecast = fcRows.reduce((s,fc)=>s + (Number(fc.forecast)||0), 0);
   const low = fcRows.reduce((s,fc)=>s + (Number(fc.pessimistic)||0), 0);
@@ -4808,6 +4809,78 @@ const parseNum = raw => {
   return Number.isFinite(v) ? v : 0;
 };
 const parseIntSafe = raw => Math.trunc(parseNum(raw)) || 0;
+
+// ═══════════════════════════════════════════════════════════
+// v167 CANONICAL TRUTH CONTRACT
+// Exactly one commercial truth per account:
+// historical_turnover                  = closed history through 2025
+// monthly_updated_ytd_turnover         = cumulative current-year invoiced turnover at snapshot
+// monthly_updated_open_orderbook       = open orderbook at the same snapshot
+// visible_2026                         = YTD turnover + open orderbook, calculated exactly once
+// Legacy source_type aliases are accepted at import, but normalized immediately.
+// ═══════════════════════════════════════════════════════════
+const CANONICAL_TRUTH_SOURCE = Object.freeze({
+  HISTORICAL_TURNOVER: 'historical_turnover',
+  MONTHLY_UPDATED_YTD_TURNOVER: 'monthly_updated_ytd_turnover',
+  MONTHLY_UPDATED_OPEN_ORDERBOOK: 'monthly_updated_open_orderbook'
+});
+const normalizeTruthSourceType = (raw, kind = '') => {
+  const v = String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (v === CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER || v === 'historical' || v === 'history_turnover') return CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER;
+  if ([CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER, 'monthly_turnover', 'monthly_updated_turnover', 'current_ytd_turnover', 'ytd_turnover'].includes(v)) return CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER;
+  if ([CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK, 'monthly_orderbook', 'monthly_updated_orderbook', 'open_orderbook', 'current_open_orderbook'].includes(v)) return CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK;
+  if (!v && kind === 'orderbook') return '';
+  return v || '';
+};
+const canonicalTruthSnapshot = a => {
+  const dates = Array.isArray(a?.snapshotDates) ? a.snapshotDates : [];
+  return dates.filter(Boolean).map(String).sort().slice(-1)[0] || '';
+};
+const getAccountTruth = a => {
+  const rev = Array.isArray(a?.rev) ? a.rev : [];
+  const monthlyUpdatedYtdTurnover = Math.max(0, Number(a?.turnoverYTD26) || 0);
+  const monthlyUpdatedOpenOrderbook = Math.max(0, Number(a?.orderbookOpen26) || 0);
+  const visible2026 = monthlyUpdatedYtdTurnover + monthlyUpdatedOpenOrderbook;
+  return Object.freeze({
+    historicalTurnover2025: Math.max(0, Number(rev[11]) || 0),
+    monthlyUpdatedYtdTurnover,
+    monthlyUpdatedOpenOrderbook,
+    visible2026,
+    snapshotDate: canonicalTruthSnapshot(a),
+    sourceTypes: Object.freeze({
+      historical: CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER,
+      currentTurnover: CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER,
+      currentOrderbook: CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK
+    })
+  });
+};
+const getArticleTruth = x => {
+  const monthlyUpdatedYtdTurnover = Math.max(0, Number(x?.turnoverYTD26) || 0);
+  const monthlyUpdatedOpenOrderbook = Math.max(0, Number(x?.orderbookOpen26) || 0);
+  return Object.freeze({
+    monthlyUpdatedYtdTurnover,
+    monthlyUpdatedOpenOrderbook,
+    visible2026: monthlyUpdatedYtdTurnover + monthlyUpdatedOpenOrderbook
+  });
+};
+const applyCanonicalAccountTruth = a => {
+  if (!a || typeof a !== 'object') return a;
+  const t = getAccountTruth(a);
+  a.accountTruth = {
+    historical_turnover_2025: t.historicalTurnover2025,
+    monthly_updated_ytd_turnover: t.monthlyUpdatedYtdTurnover,
+    monthly_updated_open_orderbook: t.monthlyUpdatedOpenOrderbook,
+    visible_2026: t.visible2026,
+    snapshot_date: t.snapshotDate
+  };
+  a.fy26Visible = t.visible2026;
+  if (Array.isArray(a.rev)) a.rev[12] = t.visible2026; // compatibility projection only; never an independent source
+  return a;
+};
+window.CANONICAL_TRUTH_SOURCE = CANONICAL_TRUTH_SOURCE;
+window.normalizeTruthSourceType = normalizeTruthSourceType;
+window.getAccountTruth = getAccountTruth;
+window.getArticleTruth = getArticleTruth;
 
 
 const normalizeAccountRuntime = a => {
@@ -4837,14 +4910,14 @@ const normalizeAccountRuntime = a => {
       ob26Qty: Number(x.ob26Qty ?? xq[12] ?? 0) || 0
     };
   }) : [];
-  return {
+  return applyCanonicalAccountTruth({
     ...a,
     origin: getAccountOrigin(a),
     source: getAccountSource(a),
     rev, qty, price, articles,
     top10pos: Array.isArray(a.top10pos) ? a.top10pos : [],
     top10neg: Array.isArray(a.top10neg) ? a.top10neg : []
-  };
+  });
 };
 
 const toast = (msg, type = '') => {
@@ -5309,13 +5382,11 @@ const accountForecastBreakdownFY26 = a => {
   const rev = CONFIG.YEARS.map((_, i) => Number((a.rev || [])[i]) || 0);
   const hist = rev.slice(0,12);
   const y23 = rev[9] || 0, y24 = rev[10] || 0, y25 = rev[11] || 0;
-  // 2026 visibility rule: current OB26 / orderbook-derived values are the only visible 2026 truth.
-  const to26 = Number(a.turnoverYTD26 || 0) || 0;
-  const obOpen26 = Number(a.orderbookOpen26 || 0) || 0;
-  // v65 Source-of-Truth correction:
-  // FY26 visible = monthly TO_ORDB 2026 turnover/YTD + open TO_ORDB orderbook.
-  // Static/historical IDENTNR 2026 rows must not overwrite or inflate this active visibility.
-  const ob26 = Math.max(0, to26 + obOpen26);
+  // v167 canonical truth: no report, heatmap or forecast may calculate current visibility independently.
+  const truth = getAccountTruth(a);
+  const to26 = truth.monthlyUpdatedYtdTurnover;
+  const obOpen26 = truth.monthlyUpdatedOpenOrderbook;
+  const ob26 = truth.visible2026;
   const pattern = classifyBusinessPatternFY26(rev);
   const baseRecent = weightedRecentBase(rev);
   const med = pattern.med || 0;
@@ -5431,9 +5502,10 @@ const snapshotBenchmarkFY26 = (a, fc) => {
   const month = snapshotMonthFY26();
   const currentYear = 2026;
   const priorYear = 2025;
-  const to26 = Number((fc && fc.to26) ?? a?.turnoverYTD26 ?? 0) || 0;
-  const openOB = Number((fc && fc.obOpen26) ?? a?.orderbookOpen26 ?? 0) || 0;
-  const currentVisible = Math.max(0, Number((fc && fc.ob26) ?? (to26 + openOB)) || 0);
+  const truth = getAccountTruth(a);
+  const to26 = truth.monthlyUpdatedYtdTurnover;
+  const openOB = truth.monthlyUpdatedOpenOrderbook;
+  const currentVisible = truth.visible2026;
   const priorYTD = Math.max(0, v85YTD(a, priorYear, month));
   const priorOpenOB = null; // Current project truth set has no prior-year monthly orderbook snapshot.
   const priorVisible = priorYTD;
@@ -5553,9 +5625,10 @@ const accountRuntimeStatus = a => {
 
 const aggregatePortfolio = data => {
   const totals = CONFIG.YEARS.map((_, i) => data.reduce((s, a) => s + (Number((a.rev || [])[i]) || 0), 0));
-  const to26 = data.reduce((s,a)=>s + (Number(a.turnoverYTD26)||0), 0);
-  const obOpen26 = data.reduce((s,a)=>s + (Number(a.orderbookOpen26)||0), 0);
-  const visible26 = data.reduce((s,a)=>s + (Number(a.fy26Visible ?? (a.rev||[])[12])||0), 0) || (to26 + obOpen26);
+  const truths = data.map(getAccountTruth);
+  const to26 = truths.reduce((s,t)=>s + t.monthlyUpdatedYtdTurnover, 0);
+  const obOpen26 = truths.reduce((s,t)=>s + t.monthlyUpdatedOpenOrderbook, 0);
+  const visible26 = truths.reduce((s,t)=>s + t.visible2026, 0);
   const fcRows = data.map(a => accountForecastBreakdownFY26(a));
   const fy26 = fcRows.reduce((s, fc) => s + (fc.forecast || 0), 0);
   const fy26Low = fcRows.reduce((s, fc) => s + (fc.pessimistic || 0), 0);
@@ -6531,8 +6604,9 @@ const buildCustomerArticleReport = () => {
   const accountSections = accounts.map(acc => {
     const rows = articleReportRowsForAccount(acc);
     const fc = accountForecastBreakdownFY26(acc);
-    const r25 = Number((acc.rev||[])[11]) || 0;
-    const ob26 = Number((acc.rev||[])[12]) || 0;
+    const truth = getAccountTruth(acc);
+    const r25 = truth.historicalTurnover2025;
+    const ob26 = truth.visible2026;
     return `<div class="report-section"><div class="report-section-title">${reportSafe(acc.name)} · Artikelliste</div><div class="report-grid-kpi"><div class="report-kpi"><div class="report-kpi-l">Kunde</div><div class="report-kpi-v">${reportSafe(acc.id)}</div><div class="report-kpi-sub">${reportSafe(acc.country)} · ${reportSafe(acc.segment)}</div></div><div class="report-kpi"><div class="report-kpi-l">Artikel</div><div class="report-kpi-v">${fmt.num(rows.length)}</div><div class="report-kpi-sub">alle Positionen</div></div><div class="report-kpi"><div class="report-kpi-l">2025</div><div class="report-kpi-v hi">${fmt.full(r25)}</div><div class="report-kpi-sub">Umsatz</div></div><div class="report-kpi"><div class="report-kpi-l">OB26</div><div class="report-kpi-v hi">${fmt.full(ob26)}</div><div class="report-kpi-sub">Orderbook</div></div><div class="report-kpi"><div class="report-kpi-l">FY26 Forecast</div><div class="report-kpi-v hi">${fmt.full(fc.forecast)}</div><div class="report-kpi-sub">modelliert</div></div><div class="report-kpi"><div class="report-kpi-l">Risk</div><div class="report-kpi-v ${acc.risk>70?'risk':acc.risk>45?'warn':'hi'}">${Number(acc.risk||0).toFixed(1)}</div><div class="report-kpi-sub">Account Score</div></div></div>${buildReportChart(acc)}<div class="report-section compact"><div class="report-section-title">Vollständige Artikelliste</div>${renderArticleRowsTable(rows)}</div></div>`;
   }).join('');
   const body = `<div class="report-sheet"><div class="report-hero"><div><div class="report-eyebrow">CAR · Customer Article Report</div><div class="report-title-main">${reportSafe(title)}</div><div class="report-meta-line">${reportGeneratedLine(stamp)}</div><div class="report-meta-line">Kundenbezogene Artikelübersicht mit Umsatzhistorie, aktuellem Orderbook, Forecast und Bedarfssignalen.</div></div><div class="report-badge-stack"><div class="report-badge">CAR</div><div class="report-badge">${accounts.length} Account(s)</div></div></div>${accountSections}${reportFooter('CAR', title, stamp)}</div>`;
@@ -6551,7 +6625,7 @@ const buildSingleArticleReport = () => {
   const total = series.rev.slice(0,12).reduce((sum,v)=>sum+v,0);
   const qtyTotal = series.qty.slice(0,12).reduce((sum,v)=>sum+v,0);
   const r25 = series.rev[11] || 0;
-  const ob26 = series.rev[12] || 0;
+  const ob26 = rows.reduce((sum,r)=>sum + getArticleTruth(r.article).visible2026, 0);
   const stamp = reportDateStamp();
   const buyers = rows.map(r => ({
     acc:r.acc,
@@ -6581,7 +6655,7 @@ const buildArticleDetail = (rows, selectedArticle = null) => {
   const total = series.rev.slice(0, 12).reduce((s,v)=>s+v,0);
   const qtyTotal = series.qty.slice(0, 12).reduce((s,v)=>s+v,0);
   const r25 = series.rev[11] || 0;
-  const ob26 = series.rev[12] || 0;
+  const ob26 = sameArticleRows.reduce((sum,r)=>sum + getArticleTruth(r.article).visible2026, 0);
   const buyers = sameArticleRows
     .map(r => ({
       acc: r.acc,
@@ -7110,6 +7184,47 @@ const validateTruthPack = (data, kind) => {
   return true;
 };
 
+const canonicalCurrentRecords = (records, canonicalType) => (records || []).filter(r => normalizeTruthSourceType(r?.source_type) === canonicalType);
+const canonicalSnapshotSet = records => [...new Set((records || []).map(r => String(r?.snapshot_date || '').trim()).filter(Boolean))].sort();
+const validateCanonicalTruthCoherence = packs => {
+  const turnoverRecords = packs?.turnover?.data?.records || [];
+  const orderbookRecords = packs?.orderbook?.data?.records || [];
+  const currentTurnover = canonicalCurrentRecords(turnoverRecords, CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER);
+  const currentOrderbook = canonicalCurrentRecords(orderbookRecords, CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK);
+  const turnoverSnapshots = canonicalSnapshotSet(currentTurnover);
+  const orderbookSnapshots = canonicalSnapshotSet(currentOrderbook);
+  if (turnoverSnapshots.length !== 1) throw new Error(`Canonical Truth: exactly one current-turnover snapshot required; found ${turnoverSnapshots.length || 0}`);
+  if (orderbookSnapshots.length !== 1) throw new Error(`Canonical Truth: exactly one open-orderbook snapshot required; found ${orderbookSnapshots.length || 0}`);
+  if (turnoverSnapshots[0] !== orderbookSnapshots[0]) throw new Error(`TRUTH WARNING: turnover snapshot ${turnoverSnapshots[0]} and orderbook snapshot ${orderbookSnapshots[0]} do not match`);
+  const unknown2026Turnover = turnoverRecords.filter(r => Number(r?.year) === 2026 && normalizeTruthSourceType(r?.source_type) !== CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER);
+  const unknownOrderbook = orderbookRecords.filter(r => normalizeTruthSourceType(r?.source_type) !== CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK);
+  return {
+    ok: unknownOrderbook.length === 0,
+    snapshotDate: turnoverSnapshots[0],
+    currentTurnoverRecords: currentTurnover.length,
+    currentOrderbookRecords: currentOrderbook.length,
+    excludedHistorical2026Records: unknown2026Turnover.filter(r => normalizeTruthSourceType(r?.source_type) === CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER).length,
+    unknownCurrentTurnoverRecords: unknown2026Turnover.filter(r => normalizeTruthSourceType(r?.source_type) !== CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER).length,
+    unknownOrderbookRecords: unknownOrderbook.length,
+    canonicalSourceTypes: [
+      CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER,
+      CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER,
+      CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK
+    ]
+  };
+};
+const auditAccountTruthInvariant = accounts => {
+  const violations = [];
+  (accounts || []).forEach(a => {
+    if (getAccountSource(a) === 'extern') return;
+    const t = getAccountTruth(a);
+    const alias = Number(a?.fy26Visible) || 0;
+    const revAlias = Number((a?.rev || [])[12]) || 0;
+    if (Math.abs(alias - t.visible2026) > .005 || Math.abs(revAlias - t.visible2026) > .005) violations.push({ id:a?.id || '', name:a?.name || '', expected:t.visible2026, fy26Visible:alias, rev12:revAlias });
+  });
+  return { ok: violations.length === 0, violations };
+};
+
 const getTruthPackSetFromParsed = parsed => {
   const packs = { turnover: null, orderbook: null, contacts: null, wpa1: null, wpa2: null };
   parsed.forEach(x => {
@@ -7511,21 +7626,24 @@ const buildAccountsFromTruthPacks = packs => {
   const turnoverRecords = packs.turnover.data.records || [];
   const orderbookRecords = packs.orderbook.data.records || [];
   const contactRecords = packs.contacts.data.records || [];
+  const canonicalIntegrity = validateCanonicalTruthCoherence(packs);
 
   turnoverRecords.forEach(rec => {
+    const sourceType = normalizeTruthSourceType(rec.source_type, 'turnover');
+    const year = Number(rec.year) || 0;
+    const idx = truthYearIndex(year);
+    const isHistorical = sourceType === CANONICAL_TRUTH_SOURCE.HISTORICAL_TURNOVER && idx >= 0;
+    const isCurrentYTD = sourceType === CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_YTD_TURNOVER && year === 2026;
+    if (!isHistorical && !isCurrentYTD) return; // unknown or historical 2026 rows never enter active truth
     const a = ensureTruthAccount(acc, rec);
     const value = Number(rec.turnover_eur || 0) || 0;
     const qty = Number(rec.quantity || 0) || 0;
-    const idx = truthYearIndex(rec.year);
-    if (idx >= 0) addTruthLineToAccount(a, rec, idx, value, qty, false);
-    else if (Number(rec.year) === 2026 && (String(rec.source_type || '').includes('monthly_turnover') || /TO_ORDB/i.test(String(rec.source_file || '')))) {
-      // v65: 2026 active turnover is accepted only from the monthly TO_ORDB turnover block.
-      // 2026 rows from the static IDENTNR/history file stay reference-only and are not loaded into active FY26 visibility.
-      addTruthLineToAccount(a, rec, 12, value, qty, false);
-    }
+    addTruthLineToAccount(a, rec, isCurrentYTD ? 12 : idx, value, qty, false);
   });
 
   orderbookRecords.forEach(rec => {
+    const sourceType = normalizeTruthSourceType(rec.source_type, 'orderbook');
+    if (sourceType !== CANONICAL_TRUTH_SOURCE.MONTHLY_UPDATED_OPEN_ORDERBOOK) return;
     const a = ensureTruthAccount(acc, rec);
     const value = Number(rec.open_value_eur || 0) || 0;
     const qty = Number(rec.open_quantity || 0) || 0;
@@ -7593,6 +7711,8 @@ const buildAccountsFromTruthPacks = packs => {
   const snapshots = [...new Set(orderbookRecords.map(r => r.snapshot_date).filter(Boolean))].sort();
   const sourceFiles = [packs.turnover, packs.orderbook, packs.contacts, packs.wpa1, packs.wpa2].filter(Boolean).flatMap(p => (p.data.source_files || []).map(f => f.source_file || f.source || '').filter(Boolean));
   const articleCount = allAccounts.reduce((s,a)=>s+(a.articleCount||0),0);
+  const accountIntegrity = auditAccountTruthInvariant(allAccounts);
+  if (!accountIntegrity.ok) throw new Error(`Canonical Truth invariant failed for ${accountIntegrity.violations.length} account(s)`);
   return {
     accounts: allAccounts,
     meta: {
@@ -7611,7 +7731,12 @@ const buildAccountsFromTruthPacks = packs => {
       accountsBuilt: allAccounts.length,
       articlesBuilt: articleCount,
       snapshotDates: snapshots,
-      sourceFiles: [...new Set(sourceFiles)]
+      sourceFiles: [...new Set(sourceFiles)],
+      canonicalTruth: {
+        ...canonicalIntegrity,
+        accountFormulaViolations: accountIntegrity.violations.length,
+        formula: 'visible_2026 = monthly_updated_ytd_turnover + monthly_updated_open_orderbook'
+      }
     }
   };
 };
@@ -7634,7 +7759,7 @@ const processTruthPacks = packs => {
   };
   showPreview();
   const wpaTxt = (built.meta.wpa1Records || built.meta.wpa2Records) ? ` · WPA1 ${fmt.num(built.meta.wpa1Records)} / WPA2 ${fmt.num(built.meta.wpa2Records)}` : '';
-  $('import-status').textContent = `✓ Truth Pack validiert · ${built.accounts.length} Accounts gebaut${wpaTxt}`;
+  $('import-status').textContent = `✓ Canonical Truth validiert · ${built.accounts.length} Accounts · Snapshot ${built.meta.canonicalTruth?.snapshotDate || '—'}${wpaTxt}`;
   $('import-status').className = 'import-status ok';
 };
 
@@ -8290,7 +8415,7 @@ const confirmImport = () => {
   if (typeof renderTargetLayer === 'function') renderTargetLayer(getFiltered());
   if (typeof renderRadarLayer === 'function') renderRadarLayer(getFiltered());
   toast(isTruth
-    ? `✓ Truth Pack geladen · <b>${imported}</b> Accounts gebaut · gespeichert${STATE.lrp?.loaded ? ' · LRP ' + STATE.lrp.targets.length + ' Zeilen' : ''}`
+    ? `✓ Canonical Truth geladen · <b>${imported}</b> Accounts · YTD + Open OB genau einmal${STATE.lrp?.loaded ? ' · LRP ' + STATE.lrp.targets.length + ' Zeilen' : ''}`
     : `✓ <b>${imported}</b> neu · <b>${updated}</b> aktualisiert · gespeichert${manifestCount ? ' · ' + manifestCount + ' Dateien validiert' : ''}${STATE.lrp?.loaded ? ' · LRP ' + STATE.lrp.targets.length + ' Zeilen' : ''}`,
     'ok');
 };
@@ -8444,8 +8569,9 @@ const aggregateTargetLayer = data => {
     const target = al.target || 0;
     const stretch = al.stretch || 0;
     const activeTarget = stretch > 0 ? stretch : target;
-    const r25 = Number((a.rev || [])[11]) || 0;
-    const visible = Number((a.rev || [])[12]) || 0;
+    const truth = getAccountTruth(a);
+    const r25 = truth.historicalTurnover2025;
+    const visible = truth.visible2026;
     const forecast = accountForecastFY26(a);
     const gap = Math.max(0, activeTarget - forecast);
     const lrpGap = Math.max(0, target - forecast);
@@ -8660,8 +8786,9 @@ const buildRadarSignals = data => {
   }
   (data || []).forEach(a => {
     const rt = accountRuntimeStatus(a);
-    const r25 = Number((a.rev||[])[11])||0;
-    const ob26 = Number((a.rev||[])[12])||0;
+    const truth = getAccountTruth(a);
+    const r25 = truth.historicalTurnover2025;
+    const ob26 = truth.visible2026;
     if (r25 > 50000 && ob26 <= 0) {
       rows.push({
         id:'silent-' + (a.id || normKey(a.name)),
@@ -9254,7 +9381,7 @@ try{window.accountRuntimeStatus=accountRuntimeStatus;}catch(e){}
       return Object.keys(by).map(function(seg){
         var accs=by[seg],n=accs.length,sFc=0,sVis=0,sTgt=0,sOB=0,sRisk=0,net=0,sR25=0;
         accs.forEach(function(a){var fc;try{fc=accountForecastBreakdownFY26(a)}catch(e){fc={}}
-          var f=Number(fc.forecast||a.fy26Forecast||0),v=Number(fc.visible||a.fy26Visible||0),t=Number(fc.target||0),ob=Number(fc.ob26||(a.rev&&a.rev[12])||0),r=Number(fc.r25||(a.rev&&a.rev[11])||0);
+          var f=Number(fc.forecast||a.fy26Forecast||0),v=Number(fc.visible||a.fy26Visible||0),t=Number(fc.target||0),ob=Number(fc.ob26||(typeof getAccountTruth==='function'?getAccountTruth(a).visible2026:0)||0),r=Number(fc.r25||(a.rev&&a.rev[11])||0);
           sFc+=f;sVis+=v;sTgt+=t;sOB+=ob;sR25+=r;sRisk+=Number(a.risk||0);net+=(f-r);});
         var mom=sR25>0?(net/sR25):(net>0?0.5:0);
         return {segment:seg,forecast:sFc,coverage:sFc>0?Math.min(100,sVis/sFc*100):0,risk:n>0?sRisk/n:0,
@@ -9371,7 +9498,7 @@ try{window.accountRuntimeStatus=accountRuntimeStatus;}catch(e){}
         var forecast=Number(fc.forecast||a.fy26Forecast||0);
         var visible=Number(fc.visible||a.fy26Visible||0);
         var target=Number(fc.target||0);
-        var ob=Number(fc.ob26||(a.rev&&a.rev[12])||0);
+        var ob=Number(fc.ob26||(typeof getAccountTruth==='function'?getAccountTruth(a).visible2026:0)||0);
         var r25=Number(fc.r25||(a.rev&&a.rev[11])||0);
         sumFc+=forecast; sumVis+=visible; sumTgt+=target; sumOB+=ob; sumR25+=r25;
         sumRisk+=Number(a.risk||0);
@@ -9523,7 +9650,7 @@ try{ if(typeof snapshotSummary==='function') window.__SR_snapshotSummary=snapsho
   function safeSegment(a){try{return esc((typeof resolveMainSegment==='function'&&resolveMainSegment(a))||a?.mainSegment||a?.application_ws||a?.segment||'—')}catch(e){return esc(a?.segment||'—')}}
   function accountName(a){return esc(a?.name||a?.customer||'Unnamed account')}
   function accountMeta(a){var origin='';try{origin=(typeof getOriginLabel==='function')?getOriginLabel(a):''}catch(e){} return esc([a?.id,a?.country,origin].filter(Boolean).join(' · '))}
-  function forecast(a){try{if(typeof accountForecastBreakdownFY26==='function')return accountForecastBreakdownFY26(a)}catch(e){} var y25=Number((a?.rev||[])[11]||0), ob=Number(a?.fy26Visible||a?.orderbookOpen26||0); return {forecast:Number(a?.fy26Forecast||ob||0),ob26:ob,openGap:Math.max(0,(Number(a?.fy26Forecast||0)||0)-ob),coverage:0,y25:y25}}
+  function forecast(a){try{if(typeof accountForecastBreakdownFY26==='function')return accountForecastBreakdownFY26(a)}catch(e){} var y25=Number((a?.rev||[])[11]||0), ob=Number((typeof getAccountTruth==='function'?getAccountTruth(a).visible2026:((Number(a?.turnoverYTD26)||0)+(Number(a?.orderbookOpen26)||0)))||0); return {forecast:Number(a?.fy26Forecast||ob||0),ob26:ob,openGap:Math.max(0,(Number(a?.fy26Forecast||0)||0)-ob),coverage:0,y25:y25}}
   function currentData(){try{if(typeof territoryAccounts==='function')return territoryAccounts()||[]}catch(e){console.warn('v86 territoryAccounts unavailable',e)} try{if(typeof getFiltered==='function')return getFiltered()||[]}catch(e){} return []}
   function rowsFor(data){try{if(typeof accountImpactRows==='function')return accountImpactRows(data)||[]}catch(e){console.warn('v86 accountImpactRows fallback',e)} return (data||[]).map(function(a){var fc=forecast(a), y25=Number((a?.rev||[])[11]||fc.y25||0)||0, fy=Number(fc.forecast||0)||0; var r={a:a,y25:y25,ob26:Number(fc.ob26||0)||0,fy26:fy,delta:fy-y25,openGap:Number(fc.openGap||0)||0,coverage:Number(fc.coverage||0)||0,risk:Number(a?.risk||0)||0}; try{r.signal=(typeof accountImpactSignal==='function')?accountImpactSignal(r):{label:r.delta<0?'Negative impact':'Positive impact',cls:r.delta<0?'neg':'pos'}}catch(e){r.signal={label:r.delta<0?'Negative impact':'Positive impact',cls:r.delta<0?'neg':'pos'}} return r})}
   function basisValue(a,basis){var fc=forecast(a); if(basis==='y25')return Math.max(0,Number((a?.rev||[])[11]||0)||0); if(basis==='visible26')return Math.max(0,Number(fc.ob26||a?.fy26Visible||0)||0); return Math.max(0,Number(fc.forecast||0)||0)}
@@ -9600,7 +9727,7 @@ try{ if(typeof snapshotSummary==='function') window.__SR_snapshotSummary=snapsho
   }
   function forecast(a){
     try{if(typeof accountForecastBreakdownFY26==='function')return accountForecastBreakdownFY26(a)}catch(e){}
-    var y25=safeMoney((a&&a.rev||[])[11]); var f=safeMoney(a&&a.fy26Forecast)||safeMoney(a&&a.fy26Visible); var ob=safeMoney(a&&a.fy26Visible); return {y25:y25,forecast:f,ob26:ob,openGap:Math.max(0,f-ob),coverage:f>0?ob/f:0,delta25:f-y25,deltaPct25:y25>0?f/y25-1:null,businessType:a&&a.pattern||''};
+    var y25=safeMoney((a&&a.rev||[])[11]); var ob=safeMoney(typeof getAccountTruth==='function'?getAccountTruth(a).visible2026:((a&&a.turnoverYTD26||0)+(a&&a.orderbookOpen26||0))); var f=safeMoney(a&&a.fy26Forecast)||ob; return {y25:y25,forecast:f,ob26:ob,openGap:Math.max(0,f-ob),coverage:f>0?ob/f:0,delta25:f-y25,deltaPct25:y25>0?f/y25-1:null,businessType:a&&a.pattern||''};
   }
   function targetAgg(a){
     try{if(typeof reportTargetAggSafe==='function')return reportTargetAggSafe([a])}catch(e){}
@@ -9929,7 +10056,7 @@ const $=id=>document.getElementById(id);const _pad=n=>String(n).padStart(2,"0");
 const priorities=['KRITISCH','HOCH','MITTEL','NIEDRIG'];const statuses=['PLANNED','IN_PROGRESS','WAITING_CUSTOMER','WAITING_INTERNAL','ESCALATED','DONE','CANCELLED'];const outcomes=['','WON','ADVANCED','PENDING','LOST_TO_COMPETITOR','NO_RESPONSE','DEFERRED','STRUCTURALLY_LOST'];const segments=['Hydro','Wind','Heavy duty','Gas and steam','Offshore','Railway','Waste to energy','Steel','Tire molds','Injection molding','Polyester','General industry','Energy','Industry','Transportation','Others','Unassigned / Check'];const riskTypes=['Revenue Risk','Opportunity','Low-Hanging Fruit','Relationship Risk','Internal Blocker','Strategic Escalation'];
 const SOSX_RISKTYPE=t=>{t=String(t||"").toUpperCase();if(t.indexOf("STRUCTURAL")>=0)return"Strategic Escalation";if(t.indexOf("DEFEND")>=0)return"Revenue Risk";if(t.indexOf("CRITICAL")>=0||t.indexOf("TARGET")>=0)return"Revenue Risk";if(t.indexOf("VISIBILITY")>=0)return"Opportunity";return"Opportunity";};const SOSX_SEGMAP=s=>{s=String(s||"").toLowerCase();if(s.indexOf("wasserturbin")>=0||s.indexOf("hydro")>=0)return"Hydropower";if(s.indexOf("schienen")>=0||s.indexOf("rail")>=0)return"Mobility / Rail";if(s.indexOf("spritz")>=0||s.indexOf("oem")>=0||s.indexOf("maschinen")>=0)return"Machinery / OEM";if(s.indexOf("ersatz")>=0||s.indexOf("spare")>=0||s.indexOf("aftermarket")>=0)return"Aftermarket / Spare Parts";return"General Industry";};const SOSX_PRIO=score=>{score=Number(score)||0;return score>=11?"KRITISCH":score>=8?"HOCH":score>=5?"MITTEL":"NIEDRIG";};function buildLiveSignals(){  try{    if(typeof buildRadarSignals!=="function")return [];    var data=(typeof getFiltered==="function")?getFiltered():((typeof STATE!=="undefined"&&STATE.accounts)?STATE.accounts:[]);    var sigs=buildRadarSignals(data||[])||[];    var sc=(typeof radarScore==="function")?radarScore:(s=>Number(s.impact||0)*2+Number(s.urgency||0));    return sigs.map(function(s){      var acc=s.account||{};      var impact=Number(s.gap||s.target||0)||0;      return {        signal_id:String(s.id||("RADAR-"+(acc.id||s.title))),        account_id:String(acc.id||""),        account_name:String(s.title||acc.name||"Account"),        main_segment:(acc.mainSegment&&acc.mainSegment!=="—")?String(acc.mainSegment):SOSX_SEGMAP(acc.segment),        title:String(s.type||"RADAR Signal"),        reason:String(s.note||""),        next_step:"Naechsten konkreten Kontakt/Schritt definieren und Ergebnis dokumentieren.",        priority:SOSX_PRIO(sc(s)),        due_date:String(s.due||today),        commercial_impact_eur:impact,        risk_type:SOSX_RISKTYPE(s.type),        visibility:""      };    });  }catch(e){console.warn("buildLiveSignals failed",e);return [];}}Object.defineProperty(window,"__SOSX_SIGNALS",{get:buildLiveSignals,configurable:true});let radarSignals=buildLiveSignals();
 const seed=[];
-let state=load(),active='dashboard',selectedActionId='SOS-ACT-000001',selectedActionSource='',calendarCursor=today,selectedDate=today;function enterApp(){var g=$('sosx-gate');if(g)g.classList.add('hide');var a=$('sosx-app');if(a)a.classList.remove('hide');renderAll();}$('sosx-gatePass').addEventListener('keydown',e=>{if(e.key==='Enter')enterApp()});function load(){var _pmap={PLANNED:10,IN_PROGRESS:50,WAITING_CUSTOMER:65,WAITING_INTERNAL:65,ESCALATED:75,DONE:100,CANCELLED:0};var _fix=function(st){if(st&&Array.isArray(st.actions)){st.actions.forEach(function(a){if(a.progress==null||a.progress===0){var d=_pmap[a.status];if(d!=null)a.progress=d;}if(!a.alert_id){try{a.alert_id=srAlertId({account_id:a.account_id,title:a.title,risk_type:a.risk_type});}catch(e){}}});var _seen={},_out=[];st.actions.forEach(function(a){var k=a.alert_id||a.action_id||(a.account_id+'|'+a.title);if(_seen[k]){if(a.status==='DONE'||a.outcome){_out.push(a);}return;}_seen[k]=1;_out.push(a);});st.actions=_out;}return st;};try{const s=JSON.parse(localStorage.getItem(storageKey));if(s&&Array.isArray(s.actions))return _fix(s)}catch(e){}try{const s=JSON.parse(localStorage.getItem(storageKey+'_REDUNDANT'));if(s&&Array.isArray(s.actions))return _fix(s)}catch(e){}try{const s=JSON.parse(localStorage.getItem(legacyStorageKey));if(s&&Array.isArray(s.actions)){s.version='4.0-migrated';return _fix(s)}}catch(e){}return{version:'4.0',created_at:today,updated_at:today,actions:JSON.parse(JSON.stringify(seed)),thread_notes:{}}}var SAWARO_BACKUP=(function(){
+let state=load(),active='dashboard',selectedActionId='SOS-ACT-000001',selectedActionSource='',calendarCursor=today,selectedDate=today;function enterApp(){var g=$('sosx-gate');if(g)g.classList.add('hide');var a=$('sosx-app');if(a)a.classList.remove('hide');renderAll();}$('sosx-gatePass').addEventListener('keydown',e=>{if(e.key==='Enter')enterApp()});function load(){var _pmap={PLANNED:10,IN_PROGRESS:50,WAITING_CUSTOMER:65,WAITING_INTERNAL:65,ESCALATED:75,DONE:100,CANCELLED:0};var _fix=function(st){if(st&&Array.isArray(st.actions)){st.actions.forEach(function(a){a.priority=sosxNormPriority(a.priority);if(a.progress==null||a.progress===0){var d=_pmap[a.status];if(d!=null)a.progress=d;}if(!a.alert_id){try{a.alert_id=srAlertId({account_id:a.account_id,title:a.title,risk_type:a.risk_type});}catch(e){}}});var _seen={},_out=[];st.actions.forEach(function(a){var k=a.alert_id||a.action_id||(a.account_id+'|'+a.title);if(_seen[k]){if(a.status==='DONE'||a.outcome){_out.push(a);}return;}_seen[k]=1;_out.push(a);});st.actions=_out;}return st;};try{const s=JSON.parse(localStorage.getItem(storageKey));if(s&&Array.isArray(s.actions))return _fix(s)}catch(e){}try{const s=JSON.parse(localStorage.getItem(storageKey+'_REDUNDANT'));if(s&&Array.isArray(s.actions))return _fix(s)}catch(e){}try{const s=JSON.parse(localStorage.getItem(legacyStorageKey));if(s&&Array.isArray(s.actions)){s.version='4.0-migrated';return _fix(s)}}catch(e){}return{version:'4.0',created_at:today,updated_at:today,actions:JSON.parse(JSON.stringify(seed)),thread_notes:{}}}var SAWARO_BACKUP=(function(){
   // Multi-layer local backup. Live file write (Chrome/Edge File System Access API)
   // + silent download fallback (iOS/Safari) + beforeunload safety net.
   var fileHandle=null, supported=('showSaveFilePicker' in window), dirty=false, writing=false;
@@ -10029,12 +10156,17 @@ let state=load(),active='dashboard',selectedActionId='SOS-ACT-000001',selectedAc
 })();
 function store(){state.updated_at=today;try{localStorage.setItem(storageKey,JSON.stringify(state));}catch(e){}try{localStorage.setItem(storageKey+'_REDUNDANT',JSON.stringify(state));}catch(e){}try{SAWARO_BACKUP.onChange(state);}catch(e){}}function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}function eur(v){v=Number(v||0);return v?new Intl.NumberFormat('de-AT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v):'—'}function addDays(d,n){let x=new Date(d+'T00:00:00');x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}function srIsoWeek(d){var dt=(typeof d==='string')?new Date(d+'T00:00:00'):new Date(d.getFullYear(),d.getMonth(),d.getDate());var day=(dt.getDay()+6)%7;dt.setDate(dt.getDate()-day+3);var firstThu=new Date(dt.getFullYear(),0,4);var firstDay=(firstThu.getDay()+6)%7;firstThu.setDate(firstThu.getDate()-firstDay+3);return 1+Math.round((dt-firstThu)/6048e5);}function activeA(a){return !['DONE','CANCELLED'].includes(a.status)}
 const SOSX_CRIT_LIMIT=4;
+function sosxNormPriority(v){var raw=String(v==null?'':v).trim();var p=raw.toUpperCase().replace(/[\s_-]+/g,'');if(['KRITISCH','CRITICAL','CRIT','RED','P1','PRIO1','PRIORITY1'].includes(p))return'KRITISCH';if(['HOCH','HIGH','P2','PRIO2','PRIORITY2'].includes(p))return'HOCH';if(['MITTEL','MEDIUM','MID','P3','PRIO3','PRIORITY3'].includes(p))return'MITTEL';if(['NIEDRIG','LOW','P4','PRIO4','PRIORITY4'].includes(p))return'NIEDRIG';return raw||'MITTEL'}
+function sosxIsCritical(a){if(!a)return false;var raw=String(a.priority==null?'':a.priority).trim();if(sosxNormPriority(raw)==='KRITISCH')return true;var t=(String(a.title||'')+' '+String(a.risk_type||'')).toUpperCase();return !raw&&!!(a.source_signal_id||a.alert_id)&&/(CRITICAL TARGET GAP|STRUCTURAL BREAK|KRITISCH|CRITICAL)/.test(t)}
 function sosxWorkday(ds){var g=dateObj(ds).getDay();return g!==0&&g!==6}
 function sosxNextWorkday(ds){var d=ds||today,g=0;do{d=addDays(d,1)}while(g++<370&&!sosxWorkday(d));return d}
 function sosxCriticalStrength(a){var t=String((a&&a.title)||'')+' '+String((a&&a.risk_type)||'');var s=Number((a&&a.commercial_impact_eur)||0);if(/structural break|critical target gap/i.test(t))s+=1e12;if(/highrunner/i.test(t))s+=5e11;if(/strategic|defend/i.test(t))s+=2e11;return s}
-function sosxFindCriticalSlot(due,excludeId,list){var arr=Array.isArray(list)?list:state.actions;var d=due||today,g=0;while(g++<370){if(sosxWorkday(d)){var n=arr.filter(function(x){return x&&x.action_id!==excludeId&&activeA(x)&&x.priority==='KRITISCH'&&x.due_date===d}).length;if(n<SOSX_CRIT_LIMIT)return d}d=addDays(d,1)}return due||today}
-function sosxEnsureCriticalCapacity(list){if(!Array.isArray(list))return 0;var crit=list.filter(function(a){return a&&activeA(a)&&a.priority==='KRITISCH'}).sort(function(a,b){return String(a.due_date||today).localeCompare(String(b.due_date||today))||sosxCriticalStrength(b)-sosxCriticalStrength(a)||String(a.created_at||'').localeCompare(String(b.created_at||''))||String(a.action_id||'').localeCompare(String(b.action_id||''))});var counts={},moved=0;crit.forEach(function(a){var d=a.due_date||today,g=0;while(g++<370){if(sosxWorkday(d)&&(counts[d]||0)<SOSX_CRIT_LIMIT)break;d=addDays(d,1)}counts[d]=(counts[d]||0)+1;if(a.due_date!==d){a.due_date=d;if(a.follow_up_date&&a.follow_up_date<d)a.follow_up_date=addDays(d,3);moved++}});return moved}
-function dueWeek(a){return activeA(a)&&a.due_date>=today&&a.due_date<=addDays(today,7)}function late(a){return activeA(a)&&a.due_date<today}function cls(a){return a.risk_type==='Low-Hanging Fruit'?'lowfruit':a.priority==='KRITISCH'?'critical':a.priority==='HOCH'?'high':''}function sortA(a,b){const p={KRITISCH:0,HOCH:1,MITTEL:2,NIEDRIG:3};return (p[a.priority]-p[b.priority])||String(a.due_date).localeCompare(b.due_date)||a.account_name.localeCompare(b.account_name)}function nextId(){let m=0;state.actions.forEach(a=>{const r=String(a.action_id).match(/(\d+)$/);if(r)m=Math.max(m,+r[1])});return'SOS-ACT-'+String(m+1).padStart(6,'0')}function iconNav(){$('sosx-railNav').innerHTML=$('sosx-bottomNav').innerHTML=$('sosx-quickTabs').innerHTML='';nav.forEach(([id,label,icon])=>{let b=document.createElement('button');b.dataset.screen=id;var _r=(window.SAWARO_NAV_ICON&&window.SAWARO_NAV_ICON[id]);var _u=(_r&&window.SAWARO_ICONS&&window.SAWARO_ICONS[_r]);var _ic=_u?('<span class="swicon" style="background-image:url('+_u+')"></span>'):icon;b.innerHTML=_ic+'<span>'+label+'</span>';b.onclick=()=>showScreen(id);$('sosx-railNav').appendChild(b);let n=b.cloneNode(true);n.onclick=()=>showScreen(id);$('sosx-bottomNav').appendChild(n);if(['dashboard','sos','calendar','inbox','radar','report'].includes(id)){let q=document.createElement('button');q.dataset.screen=id;q.textContent=label;q.onclick=()=>showScreen(id);$('sosx-quickTabs').appendChild(q)}})}function hydrateIcons(root){
+function sosxCriticalCounts(list){var by={};(Array.isArray(list)?list:[]).forEach(function(a){if(a&&activeA(a)&&sosxIsCritical(a)){var d=a.due_date||today;by[d]=(by[d]||0)+1}});return by}
+function sosxHasCriticalOverflow(list){var by=sosxCriticalCounts(list);return Object.keys(by).some(function(d){return by[d]>SOSX_CRIT_LIMIT||!sosxWorkday(d)})}
+function sosxFindCriticalSlot(due,excludeId,list){var arr=Array.isArray(list)?list:state.actions;var d=due||today,g=0;while(g++<370){if(sosxWorkday(d)){var n=arr.filter(function(x){return x&&x.action_id!==excludeId&&activeA(x)&&sosxIsCritical(x)&&x.due_date===d}).length;if(n<SOSX_CRIT_LIMIT)return d}d=addDays(d,1)}return due||today}
+function sosxEnsureCriticalCapacity(list){if(!Array.isArray(list))return 0;var normalized=0;list.forEach(function(a){if(!a)return;var p=sosxNormPriority(a.priority);if(a.priority!==p){a.priority=p;normalized++}});var crit=list.filter(function(a){return a&&activeA(a)&&sosxIsCritical(a)}).sort(function(a,b){return String(a.due_date||today).localeCompare(String(b.due_date||today))||sosxCriticalStrength(b)-sosxCriticalStrength(a)||String(a.created_at||'').localeCompare(String(b.created_at||''))||String(a.action_id||'').localeCompare(String(b.action_id||''))});var counts={},moved=0;crit.forEach(function(a){var d=a.due_date||today,g=0;while(g++<370){if(sosxWorkday(d)&&(counts[d]||0)<SOSX_CRIT_LIMIT)break;d=addDays(d,1)}counts[d]=(counts[d]||0)+1;if(a.due_date!==d){a.due_date=d;if(a.follow_up_date&&a.follow_up_date<d)a.follow_up_date=addDays(d,3);moved++}});return moved}
+function sosxEnforceCriticalCapacity(){var needs=sosxHasCriticalOverflow(state.actions);var normalized=0;state.actions.forEach(function(a){if(!a)return;var p=sosxNormPriority(a.priority);if(a.priority!==p){a.priority=p;normalized++}});var moved=needs?sosxEnsureCriticalCapacity(state.actions):0;if(normalized||moved){state.sosx_capacity_policy='SOSX_CAP4_RUNTIME_V166_NORMALIZED';state.sosx_capacity_applied_at=today;store()}return moved}
+function dueWeek(a){return activeA(a)&&a.due_date>=today&&a.due_date<=addDays(today,7)}function late(a){return activeA(a)&&a.due_date<today}function cls(a){return a.risk_type==='Low-Hanging Fruit'?'lowfruit':sosxIsCritical(a)?'critical':sosxNormPriority(a.priority)==='HOCH'?'high':''}function sortA(a,b){const p={KRITISCH:0,HOCH:1,MITTEL:2,NIEDRIG:3};return (p[a.priority]-p[b.priority])||String(a.due_date).localeCompare(b.due_date)||a.account_name.localeCompare(b.account_name)}function nextId(){let m=0;state.actions.forEach(a=>{const r=String(a.action_id).match(/(\d+)$/);if(r)m=Math.max(m,+r[1])});return'SOS-ACT-'+String(m+1).padStart(6,'0')}function iconNav(){$('sosx-railNav').innerHTML=$('sosx-bottomNav').innerHTML=$('sosx-quickTabs').innerHTML='';nav.forEach(([id,label,icon])=>{let b=document.createElement('button');b.dataset.screen=id;var _r=(window.SAWARO_NAV_ICON&&window.SAWARO_NAV_ICON[id]);var _u=(_r&&window.SAWARO_ICONS&&window.SAWARO_ICONS[_r]);var _ic=_u?('<span class="swicon" style="background-image:url('+_u+')"></span>'):icon;b.innerHTML=_ic+'<span>'+label+'</span>';b.onclick=()=>showScreen(id);$('sosx-railNav').appendChild(b);let n=b.cloneNode(true);n.onclick=()=>showScreen(id);$('sosx-bottomNav').appendChild(n);if(['dashboard','sos','calendar','inbox','radar','report'].includes(id)){let q=document.createElement('button');q.dataset.screen=id;q.textContent=label;q.onclick=()=>showScreen(id);$('sosx-quickTabs').appendChild(q)}})}function hydrateIcons(root){
   try{
     var map=(typeof window!=='undefined'&&window.SAWARO_BTN_ICONS)||{};
     var scope=root||document;
@@ -10139,7 +10271,7 @@ function actionCard(a,compact=false,source=''){
   set('sosx-rgLoad', open.length);
   set('sosx-rgImpact', totalImpact>=1000000?(totalImpact/1000000).toFixed(1)+'M':Math.round(totalImpact/1000)+'k');
 }
-function renderAll(updateDetail=true){radarSignals=buildLiveSignals();renderKPIs();renderDashboard();try{fillSOSRadar();}catch(e){}renderSOS();renderCalendar();renderInbox();renderAccount();renderReport();renderWhere();if(updateDetail)renderActionDetail();document.querySelectorAll('[data-screen]').forEach(b=>b.classList.toggle('active',b.dataset.screen===active))}function renderKPIs(){const open=state.actions.filter(activeA),crit=open.filter(a=>a.priority==='KRITISCH'),high=open.filter(a=>a.priority==='HOCH'),week=open.filter(dueWeek),done=state.actions.filter(a=>a.status==='DONE'),outNeed=done.filter(a=>!a.outcome);$('sosx-kCrit').textContent=crit.length;$('sosx-kHigh').textContent=high.length;$('sosx-sOpen').textContent=open.length;$('sosx-sDue').textContent=week.length;$('sosx-sLate').textContent=open.filter(late).length;$('sosx-sDone').textContent=done.length;$('sosx-sideCrit').textContent=crit.length;$('sosx-sideHigh').textContent=high.length;$('sosx-sideWeek').textContent=week.length;$('sosx-sideOutcome').textContent=outNeed.length;$('sosx-mobileCrit').textContent=crit.length+' kritisch'}function renderDashboard(){const focus=state.actions.filter(activeA).sort(sortA).slice(0,4);$('sosx-focusList').innerHTML=focus.map(actionCard).join('')||empty('Keine aktiven Actions.');$('sosx-lhfList').innerHTML=state.actions.filter(a=>activeA(a)&&a.risk_type==='Low-Hanging Fruit').map(actionCard).join('')||empty('Keine Low-Hanging-Fruit Action aktiv.');$('sosx-segmentList').innerHTML=segments.map(s=>{let arr=state.actions.filter(a=>activeA(a)&&String(a.main_segment||'').toLowerCase()===String(s||'').toLowerCase()),imp=arr.reduce((x,a)=>x+Number(a.commercial_impact_eur||0),0);return{ s,c:arr.length,imp }}).filter(x=>x.c||x.imp).sort((a,b)=>b.imp-a.imp).map(x=>`<div class="action"><div class="action-head"><div><div class="title">${esc(x.s)}</div><div class="meta">${x.c} aktive Actions · ${eur(x.imp)}</div></div><span class="chip lime">${x.c}</span></div></div>`).join('')||empty('Noch keine Segmentdaten.')}function renderSOS(){$('sosx-criticalList').innerHTML=state.actions.filter(a=>activeA(a)&&['KRITISCH','HOCH'].includes(a.priority)).sort(sortA).map(actionCard).join('')||empty('Keine kritischen oder hohen Actions offen.');let q=($('sosx-searchBox')?.value||'').toLowerCase(),sf=$('sosx-statusFilter')?.value||'OPEN';let arr=state.actions.filter(a=>{let txt=[a.title,a.account_name,a.main_segment,a.next_step,a.reason,a.risk_type].join(' ').toLowerCase();return(!q||txt.includes(q))&&(sf==='ALL'?true:sf==='OPEN'?activeA(a):a.status===sf)}).sort(sortA);$('sosx-weeklyBoard').innerHTML=priorities.map(p=>`<div class="lane"><h3><span>${p}</span><span class="count">${arr.filter(a=>a.priority===p).length}</span></h3>${arr.filter(a=>a.priority===p).map(a=>actionCard(a,true)).join('')||emptySmall('Keine Actions')}</div>`).join('')}
+function renderAll(updateDetail=true){radarSignals=buildLiveSignals();renderKPIs();renderDashboard();try{fillSOSRadar();}catch(e){}renderSOS();renderCalendar();renderInbox();renderAccount();renderReport();renderWhere();if(updateDetail)renderActionDetail();document.querySelectorAll('[data-screen]').forEach(b=>b.classList.toggle('active',b.dataset.screen===active))}function renderKPIs(){const open=state.actions.filter(activeA),crit=open.filter(a=>sosxIsCritical(a)),high=open.filter(a=>a.priority==='HOCH'),week=open.filter(dueWeek),done=state.actions.filter(a=>a.status==='DONE'),outNeed=done.filter(a=>!a.outcome);$('sosx-kCrit').textContent=crit.length;$('sosx-kHigh').textContent=high.length;$('sosx-sOpen').textContent=open.length;$('sosx-sDue').textContent=week.length;$('sosx-sLate').textContent=open.filter(late).length;$('sosx-sDone').textContent=done.length;$('sosx-sideCrit').textContent=crit.length;$('sosx-sideHigh').textContent=high.length;$('sosx-sideWeek').textContent=week.length;$('sosx-sideOutcome').textContent=outNeed.length;$('sosx-mobileCrit').textContent=crit.length+' kritisch'}function renderDashboard(){const focus=state.actions.filter(activeA).sort(sortA).slice(0,4);$('sosx-focusList').innerHTML=focus.map(actionCard).join('')||empty('Keine aktiven Actions.');$('sosx-lhfList').innerHTML=state.actions.filter(a=>activeA(a)&&a.risk_type==='Low-Hanging Fruit').map(actionCard).join('')||empty('Keine Low-Hanging-Fruit Action aktiv.');$('sosx-segmentList').innerHTML=segments.map(s=>{let arr=state.actions.filter(a=>activeA(a)&&String(a.main_segment||'').toLowerCase()===String(s||'').toLowerCase()),imp=arr.reduce((x,a)=>x+Number(a.commercial_impact_eur||0),0);return{ s,c:arr.length,imp }}).filter(x=>x.c||x.imp).sort((a,b)=>b.imp-a.imp).map(x=>`<div class="action"><div class="action-head"><div><div class="title">${esc(x.s)}</div><div class="meta">${x.c} aktive Actions · ${eur(x.imp)}</div></div><span class="chip lime">${x.c}</span></div></div>`).join('')||empty('Noch keine Segmentdaten.')}function renderSOS(){$('sosx-criticalList').innerHTML=state.actions.filter(a=>activeA(a)&&['KRITISCH','HOCH'].includes(a.priority)).sort(sortA).map(actionCard).join('')||empty('Keine kritischen oder hohen Actions offen.');let q=($('sosx-searchBox')?.value||'').toLowerCase(),sf=$('sosx-statusFilter')?.value||'OPEN';let arr=state.actions.filter(a=>{let txt=[a.title,a.account_name,a.main_segment,a.next_step,a.reason,a.risk_type].join(' ').toLowerCase();return(!q||txt.includes(q))&&(sf==='ALL'?true:sf==='OPEN'?activeA(a):a.status===sf)}).sort(sortA);$('sosx-weeklyBoard').innerHTML=priorities.map(p=>`<div class="lane"><h3><span>${p}</span><span class="count">${arr.filter(a=>a.priority===p).length}</span></h3>${arr.filter(a=>a.priority===p).map(a=>actionCard(a,true)).join('')||emptySmall('Keine Actions')}</div>`).join('')}
 function labelFor(id){const map={dashboard:['Commander Dashboard','Home · Tagesbild · Top Execution Focus'],sos:['SOS Action Board','SOS · Prioritäten · Weekly Board'],calendar:['SOS Kalender','Kalender · Agenda · nächste 7 Tage'],inbox:['Action Proposal Intake','Radar-Signale · Vorschläge · Übernahme'],action:['Action Detail','Detail · Update · Outcome'],account:['Account Thread','Kunde · Maßnahmenhistorie · Pulse'],radar:['Sales Risk & Development Radar','Risk · Evidence · Next Best Action'],report:['Reports','Weekly · Monthly · Export']};return map[id]||[id,''];}
 function renderWhere(){if(!$('sosx-whereTitle')||!$('sosx-whereTrail'))return;const [t,s]=labelFor(active);$('sosx-whereTitle').textContent=t;$('sosx-whereTrail').textContent=s;}
 function dateObj(d){return new Date(String(d||today)+'T00:00:00')}
@@ -10149,7 +10281,7 @@ function dayLabel(d){return dateObj(d).toLocaleDateString('de-AT',{weekday:'shor
 function monthLabel(d){return dateObj(d).toLocaleDateString('de-AT',{month:'long',year:'numeric'})}
 function tasksOn(d){return state.actions.filter(a=>a.due_date===d).sort(sortA)}
 function moveCalendar(delta){let d=dateObj(calendarCursor);d.setMonth(d.getMonth()+delta);calendarCursor=iso(d);selectedDate=iso(new Date(d.getFullYear(),d.getMonth(),Math.min(dateObj(selectedDate).getDate(),28)));renderCalendar();renderWhere()}
-function selectCalendarDate(d){selectedDate=d;calendarCursor=d;renderCalendar();renderWhere()}function renderCalendar(){if(!$('sosx-calendarGrid'))return;const open=state.actions.filter(activeA),done=state.actions.filter(a=>a.status==='DONE');$('sosx-calWeek').textContent=open.filter(a=>a.due_date>=today&&a.due_date<=addDays(today,7)).length;$('sosx-calLate').textContent=open.filter(late).length;$('sosx-calSelected').textContent=tasksOn(selectedDate).length;$('sosx-calDone').textContent=done.length;$('sosx-calendarMonth').textContent=monthLabel(calendarCursor);$('sosx-calendarSummary').textContent='Due-Date-Ansicht · '+open.length+' aktive Tasks im Action-State';const wds=['Mo','Di','Mi','Do','Fr','Sa','So'];$('sosx-calendarWeekdays').innerHTML=`<div class="cal-weekday cal-kw-head">KW</div>`+wds.map(w=>`<div class="cal-weekday">${w}</div>`).join('');let cur=dateObj(calendarCursor),first=new Date(cur.getFullYear(),cur.getMonth(),1),start=new Date(first);let offset=(first.getDay()+6)%7;start.setDate(first.getDate()-offset);let html='';for(let i=0;i<42;i++){let d=new Date(start);d.setDate(start.getDate()+i);if(i%7===0){html+=`<div class="cal-kw">${srIsoWeek(d)}</div>`;}let ds=iso(d),arr=tasksOn(ds),cls='cal-day'+(sameMonth(ds,calendarCursor)?'':' out')+(ds===today?' today':'')+(ds===selectedDate?' selected':'');html+=`<button class="${cls}" onclick="SOSX.selectCalendarDate('${ds}')"><span class="cal-num">${d.getDate()}${arr.length?`<i class="cal-badge">${arr.length}</i>`:''}</span>${arr.slice(0,3).map(a=>`<span class="cal-task ${a.priority==='KRITISCH'?'critical':a.priority==='HOCH'?'high':''}">${esc(a.account_name)}</span>`).join('')}</button>`}$('sosx-calendarGrid').innerHTML=html;$('sosx-selectedDateTitle').textContent='Agenda · '+dayLabel(selectedDate);let dayTasks=tasksOn(selectedDate);$('sosx-selectedDateMeta').textContent=dayTasks.length+' Task'+(dayTasks.length===1?'':'s');$('sosx-calendarAgenda').innerHTML=dayTasks.map(function(a){return actionCard(a,false,'calendar')}).join('')||empty('Keine Tasks an diesem Tag.');let upcoming=open.filter(a=>a.due_date>=today&&a.due_date<=addDays(today,7)).sort(sortA);$('sosx-calendarUpcoming').innerHTML=upcoming.map(function(a){return actionCard(a,false,'calendar')}).join('')||empty('Keine aktiven Tasks in den nächsten 7 Tagen.');let jump=[];for(let i=0;i<7;i++){let ds=addDays(today,i),arr=tasksOn(ds);jump.push(`<button class="date-pill ${ds===selectedDate?'active':''}" onclick="SOSX.selectCalendarDate('${ds}')"><span>${dateObj(ds).toLocaleDateString('de-AT',{weekday:'short'})}</span><b>${dateObj(ds).getDate()}</b><span>${arr.length} Task</span></button>`)}$('sosx-dateJump').innerHTML=jump.join('');var _kw=$('sosx-currentKW');if(_kw)_kw.textContent='KW '+srIsoWeek(today);}
+function selectCalendarDate(d){selectedDate=d;calendarCursor=d;renderCalendar();renderWhere()}function renderCalendar(){if(!$('sosx-calendarGrid'))return;var _capMoved=sosxEnforceCriticalCapacity();const open=state.actions.filter(activeA),done=state.actions.filter(a=>a.status==='DONE');$('sosx-calWeek').textContent=open.filter(a=>a.due_date>=today&&a.due_date<=addDays(today,7)).length;$('sosx-calLate').textContent=open.filter(late).length;$('sosx-calSelected').textContent=tasksOn(selectedDate).length;$('sosx-calDone').textContent=done.length;$('sosx-calendarMonth').textContent=monthLabel(calendarCursor);$('sosx-calendarSummary').textContent='Due-Date-Ansicht · '+open.length+' aktive Tasks im Action-State';const wds=['Mo','Di','Mi','Do','Fr','Sa','So'];$('sosx-calendarWeekdays').innerHTML=`<div class="cal-weekday cal-kw-head">KW</div>`+wds.map(w=>`<div class="cal-weekday">${w}</div>`).join('');let cur=dateObj(calendarCursor),first=new Date(cur.getFullYear(),cur.getMonth(),1),start=new Date(first);let offset=(first.getDay()+6)%7;start.setDate(first.getDate()-offset);let html='';for(let i=0;i<42;i++){let d=new Date(start);d.setDate(start.getDate()+i);if(i%7===0){html+=`<div class="cal-kw">${srIsoWeek(d)}</div>`;}let ds=iso(d),arr=tasksOn(ds),cls='cal-day'+(sameMonth(ds,calendarCursor)?'':' out')+(ds===today?' today':'')+(ds===selectedDate?' selected':'');html+=`<button class="${cls}" onclick="SOSX.selectCalendarDate('${ds}')"><span class="cal-num">${d.getDate()}${arr.length?`<i class="cal-badge">${arr.length}</i>`:''}</span>${arr.slice(0,3).map(a=>`<span class="cal-task ${a.priority==='KRITISCH'?'critical':a.priority==='HOCH'?'high':''}">${esc(a.account_name)}</span>`).join('')}</button>`}$('sosx-calendarGrid').innerHTML=html;$('sosx-selectedDateTitle').textContent='Agenda · '+dayLabel(selectedDate);let dayTasks=tasksOn(selectedDate);$('sosx-selectedDateMeta').textContent=dayTasks.length+' Task'+(dayTasks.length===1?'':'s');$('sosx-calendarAgenda').innerHTML=dayTasks.map(function(a){return actionCard(a,false,'calendar')}).join('')||empty('Keine Tasks an diesem Tag.');let upcoming=open.filter(a=>a.due_date>=today&&a.due_date<=addDays(today,7)).sort(sortA);$('sosx-calendarUpcoming').innerHTML=upcoming.map(function(a){return actionCard(a,false,'calendar')}).join('')||empty('Keine aktiven Tasks in den nächsten 7 Tagen.');let jump=[];for(let i=0;i<7;i++){let ds=addDays(today,i),arr=tasksOn(ds);jump.push(`<button class="date-pill ${ds===selectedDate?'active':''}" onclick="SOSX.selectCalendarDate('${ds}')"><span>${dateObj(ds).toLocaleDateString('de-AT',{weekday:'short'})}</span><b>${dateObj(ds).getDate()}</b><span>${arr.length} Task</span></button>`)}$('sosx-dateJump').innerHTML=jump.join('');var _kw=$('sosx-currentKW');if(_kw)_kw.textContent='KW '+srIsoWeek(today);}
 function renderInbox(){let imported=new Set(state.actions.map(a=>a.source_signal_id).filter(Boolean));let open=radarSignals.filter(s=>!imported.has(s.signal_id));$('sosx-openSignalCount').textContent=open.length;$('sosx-proposalList').innerHTML=radarSignals.map(s=>{let done=imported.has(s.signal_id);return `<div class="proposal ${s.priority==='KRITISCH'?'critical':s.priority==='HOCH'?'high':''}"><div class="action-head"><div><h3>${esc(s.account_name)}</h3><div class="title">${esc(s.title)}</div><div class="meta">${esc(s.reason)}</div></div>${chip(s.priority)}</div><div class="signal-grid"><div><small>Risk Exposure</small><b>${s.priority==='KRITISCH'?'HIGH':'MEDIUM'}</b></div><div><small>Type</small><b>${esc(s.risk_type)}</b></div><div><small>FY26 Visibility</small><b>${s.visibility}</b></div></div><div class="note"><b>Empfohlene Aktion:</b> ${esc(s.next_step)}</div><div class="buttons"><span class="chip ${done?'lime':'amber'}">${done?'Übernommen':'Offen'}</span><button class="tiny primary" ${done?'disabled':''} onclick="SOSX.convertSignal('${s.signal_id}')">In SOS + Kalender übernehmen</button><button class="tiny" onclick="SOSX.editSignal('${s.signal_id}')">Anpassen</button></div></div>`}).join('')}function renderActionDetail(){let a=state.actions.find(x=>x.action_id===selectedActionId)||state.actions.find(activeA)||state.actions[0];if(!a)return;selectedActionId=a.action_id;$('sosx-quickOutcome').value=a.outcome||'ADVANCED';$('sosx-quickOutcomeNote').value=a.outcome_note||'';var sfLink=selectedActionSource==='calendar'?`<a class="btn primary block section" style="text-decoration:none" href="${esc(sfEventUrl(a))}" target="_blank" rel="noopener noreferrer">In Salesforce öffnen</a>`:'';$('sosx-actionDetail').innerHTML=`<div class="card ${a.priority==='KRITISCH'?'red':''}"><div class="action-head"><div><span class="chip ${a.priority==='KRITISCH'?'red':a.priority==='HOCH'?'amber':'blue'}">${esc(a.priority)}</span><h2 class="section">${esc(a.title)}</h2><p class="sub">${esc(a.account_name)} · ${esc(a.main_segment)}</p></div><div class="progress" style="--p:${Number(a.progress||0)}"><b>${Number(a.progress||0)}%</b></div></div><div class="section"><div class="eyebrow">Ziel</div><p class="lead">${esc(a.reason)}</p></div><div class="signal-grid"><div><small>Owner</small><b>${esc(a.owner)}</b></div><div><small>Start</small><b>${esc(a.created_at)}</b></div><div><small>Fällig</small><b>${esc(a.due_date)}</b></div><div><small>Reminder</small><b>${esc(a.follow_up_date||'—')}</b></div></div><div class="section"><div class="eyebrow">Aktionsplan</div><div class="timeline"><div class="step done"><b>Vorbereitung & Datenreview</b><br>${esc(a.created_at)} · ${esc(a.owner)}</div><div class="step current"><b>${esc(a.next_step)}</b><br>nächster operativer Schritt</div><div class="step"><b>Ergebnisse & Commitments dokumentieren</b><br>Outcome klassifizieren</div><div class="step"><b>Maßnahmen ableiten & nachverfolgen</b><br>Follow-up sauber terminieren</div></div></div>${sfLink}</div>`}function renderAccount(){let acc=[...new Map(state.actions.map(a=>[a.account_id,a])).values()].sort((a,b)=>a.account_name.localeCompare(b.account_name));let cur=$('sosx-accountSelect').value;$('sosx-accountSelect').innerHTML=acc.map(a=>`<option value="${esc(a.account_id)}">${esc(a.account_name)}</option>`).join('');if(cur&&acc.some(a=>a.account_id===cur))$('sosx-accountSelect').value=cur;if(!$('sosx-accountSelect').value&&acc[0])$('sosx-accountSelect').value=acc[0].account_id;let id=$('sosx-accountSelect').value,filter=$('sosx-accountFilter').value;let arr=state.actions.filter(a=>a.account_id===id);if(filter==='ACTIVE')arr=arr.filter(activeA);if(filter==='DONE')arr=arr.filter(a=>a.status==='DONE');$('sosx-accountThread').innerHTML=arr.sort(sortA).map(actionCard).join('')||empty('Noch keine Actions.');let active=state.actions.filter(a=>a.account_id===id&&activeA(a)),done=state.actions.filter(a=>a.account_id===id&&a.status==='DONE'),impact=active.reduce((s,a)=>s+Number(a.commercial_impact_eur||0),0);$('sosx-accountPulse').innerHTML=`<div class="action"><div class="title">Active actions</div><div class="meta">${active.length}</div></div><div class="action"><div class="title">Completed</div><div class="meta">${done.length}</div></div><div class="action"><div class="title">Open impact</div><div class="meta">${eur(impact)}</div></div>`;$('sosx-threadNote').value=state.thread_notes[id]||''}var sosxReportMode='weekly';
 function setReportMode(m){sosxReportMode=m;try{document.querySelectorAll('[data-sosx-rmode]').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-sosx-rmode')===m);});}catch(e){}renderReport();}
 function eurR(v){try{return eur(v);}catch(e){return (Number(v)||0).toLocaleString('de-DE')+' €';}}
@@ -10506,8 +10638,8 @@ function renderReport(){if(sosxReportMode==='ccr'){$('sosx-reportPreview').inner
 }function empty(t){return `<div class="action"><div class="note">${esc(t)}</div></div>`}function emptySmall(t){return `<div class="action"><div class="meta">${esc(t)}</div></div>`}function srTriggerType(s){var t=String((s&&(s.title||s.risk_type||s.type))||'').toLowerCase();if(t.indexOf('critical target gap')>=0)return 'critical-target-gap';if(t.indexOf('target coverage')>=0)return 'target-coverage-gap';if(t.indexOf('structural break')>=0)return 'structural-break';if(t.indexOf('visibility gap')>=0)return 'visibility-gap';if(t.indexOf('defend')>=0)return 'defend-account';if(t.indexOf('reactivat')>=0||t.indexOf('reaktiv')>=0)return 'reactivation';var rt=String((s&&s.risk_type)||'').toLowerCase().replace(/[^a-z]+/g,'-');return rt||t.replace(/[^a-z0-9]+/g,'-').slice(0,40)||'signal';}
 function srAlertId(s){return 'ALERT-'+String((s&&s.account_id)||'NA').replace(/[^A-Za-z0-9]+/g,'')+'-'+srTriggerType(s);}
 function srActionHasTrigger(alertId){try{return state.actions.some(function(a){return a&&(a.alert_id===alertId||srAlertId({account_id:a.account_id,title:a.title,risk_type:a.risk_type})===alertId);});}catch(e){return false;}}
-function sosxCritCascade(due,prio,excludeId){if(prio!=='KRITISCH')return due;return sosxFindCriticalSlot(due||today,excludeId,state.actions)}function convertSignal(id){let s=radarSignals.find(x=>x.signal_id===id);if(!s)return;var alertId=srAlertId(s);if(state.actions.some(a=>a.source_signal_id===id)||srActionHasTrigger(alertId)){toast('Bereits im Kalender — kein doppelter Eintrag.','warn');return;}var dd=sosxCritCascade(s.due_date,s.priority,'');state.actions.push({action_id:nextId(),alert_id:alertId,source_signal_id:s.signal_id,account_id:s.account_id,account_name:s.account_name,main_segment:s.main_segment,title:s.title,reason:s.reason,next_step:s.next_step,owner:'MF',priority:s.priority,status:'PLANNED',due_date:dd,created_at:today,last_touch:today,follow_up_date:addDays(dd,3),commercial_impact_eur:s.commercial_impact_eur,risk_type:s.risk_type,outcome:'',outcome_note:'',progress:10});store();renderAll();toast(dd!==s.due_date?'Signal übernommen · KRITISCH-Limit (4/Tag): fällig '+dd:'Signal in SOS und Kalender übernommen.')}function editSignal(id){let s=radarSignals.find(x=>x.signal_id===id);if(!s)return;openEditor();$('sosx-fId').value='';$('sosx-fTitle').value=s.title;$('sosx-fAccountId').value=s.account_id;$('sosx-fAccountName').value=s.account_name;$('sosx-fSegment').value=s.main_segment;$('sosx-fType').value=s.risk_type;$('sosx-fPriority').value=s.priority;$('sosx-fStatus').value='PLANNED';$('sosx-fDue').value=s.due_date;$('sosx-fFollow').value=addDays(s.due_date,3);$('sosx-fImpact').value=s.commercial_impact_eur;$('sosx-fReason').value=s.reason;$('sosx-fNext').value=s.next_step}function openEditor(id){let a=id?state.actions.find(x=>x.action_id===id):null;$('sosx-editor').classList.add('open');$('sosx-editorTitle').textContent=a?'Action bearbeiten':'Neue Action';$('sosx-fId').value=a?.action_id||'';$('sosx-fTitle').value=a?.title||'';$('sosx-fOwner').value=a?.owner||'MF';$('sosx-fAccountId').value=a?.account_id||'';$('sosx-fAccountName').value=a?.account_name||'';$('sosx-fSegment').value=a?.main_segment||'Other';$('sosx-fType').value=a?.risk_type||'Opportunity';$('sosx-fPriority').value=a?.priority||'MITTEL';$('sosx-fStatus').value=a?.status||'PLANNED';(function(){var pv=Number(a?.progress||0);var s=$('sosx-fProgress');if(s)s.value=pv;var lbl=$('sosx-fProgressVal');if(lbl)lbl.textContent=pv;})();$('sosx-fDue').value=a?.due_date||today;$('sosx-fFollow').value=a?.follow_up_date||addDays(today,3);$('sosx-fImpact').value=a?.commercial_impact_eur||0;$('sosx-fReason').value=a?.reason||'';$('sosx-fNext').value=a?.next_step||'';$('sosx-fOutcome').value=a?.outcome||'';$('sosx-fOutcomeNote').value=a?.outcome_note||'';var _wk=$('sosx-fWeekly');if(_wk)_wk.checked=(a?a.includeInWeekly!==false:true)}function closeEditor(){$('sosx-editor').classList.remove('open')}function saveEditor(){let id=$('sosx-fId').value||nextId();let old=state.actions.find(a=>a.action_id===id);let a={action_id:id,source_signal_id:old?.source_signal_id||'',account_id:$('sosx-fAccountId').value||$('sosx-fAccountName').value.toUpperCase().replace(/[^A-Z0-9]+/g,'-'),account_name:$('sosx-fAccountName').value||'Scope',main_segment:$('sosx-fSegment').value,title:$('sosx-fTitle').value||'Untitled Action',reason:$('sosx-fReason').value||'Reason to be defined.',next_step:$('sosx-fNext').value||'Define concrete next step.',owner:$('sosx-fOwner').value||'MF',priority:$('sosx-fPriority').value,status:$('sosx-fStatus').value,due_date:$('sosx-fDue').value||today,created_at:old?.created_at||today,last_touch:today,follow_up_date:$('sosx-fFollow').value||'',commercial_impact_eur:Number($('sosx-fImpact').value||0),risk_type:$('sosx-fType').value,outcome:$('sosx-fOutcome').value,outcome_note:$('sosx-fOutcomeNote').value,progress:(function(){var st=$('sosx-fStatus').value;var sliderEl=$('sosx-fProgress');var manual=sliderEl?Number(sliderEl.value):NaN;if(st==='DONE')return 100;if(st==='CANCELLED')return 0;if(!isNaN(manual)&&manual>0)return manual;var def={PLANNED:10,IN_PROGRESS:50,WAITING_CUSTOMER:65,WAITING_INTERNAL:65,ESCALATED:75}[st];return def!=null?def:(old?.progress||0);})()};a.includeInWeekly=($('sosx-fWeekly')?$('sosx-fWeekly').checked:(old?old.includeInWeekly!==false:true));if(a.status==='DONE'&&!a.outcome){toast('DONE braucht ein Outcome.');return}var _od=a.due_date;if(activeA(a))a.due_date=sosxCritCascade(a.due_date,a.priority,id);state.actions=old?state.actions.map(x=>x.action_id===id?a:x):state.actions.concat(a);selectedActionId=a.action_id;selectedDate=a.due_date||selectedDate;calendarCursor=selectedDate;store();closeEditor();requestAnimationFrame(()=>$('sosx-editor').classList.remove('open'));renderAll();toast(a.due_date!==_od?'Gespeichert · KRITISCH-Limit (4/Tag): fällig '+a.due_date:'Action gespeichert.')}function saveQuickOutcome(){let a=state.actions.find(x=>x.action_id===selectedActionId);if(!a)return;if(!$('sosx-quickOutcome').value){toast('Outcome wählen.');return}a.status='DONE';a.progress=100;a.outcome=$('sosx-quickOutcome').value;a.outcome_note=$('sosx-quickOutcomeNote').value;a.last_touch=today;selectedDate=a.due_date||today;calendarCursor=selectedDate;store();showScreen('calendar');toast('Update erfasst und Action Detail geschlossen.')}function createFollowUp(id){let a=state.actions.find(x=>x.action_id===id);if(!a)return;var _fo=a.follow_up_date||addDays(today,3);var fdd=sosxCritCascade(_fo,a.priority,'');state.actions.push({...a,action_id:nextId(),source_signal_id:'',title:'Follow-up · '+a.title,reason:a.outcome_note||a.reason,next_step:'Follow-up durchführen und Ergebnis aktualisieren.',status:'PLANNED',due_date:fdd,created_at:today,last_touch:today,follow_up_date:addDays(fdd,6),outcome:'',outcome_note:'',progress:0});store();renderAll();toast(fdd!==_fo?'Follow-up · KRITISCH-Limit (4/Tag): fällig '+fdd:'Follow-up erstellt.')}function saveThreadNote(){state.thread_notes[$('sosx-accountSelect').value]=$('sosx-threadNote').value;store();toast('Thread Note gespeichert.')}function download(name,text,type='text/plain'){let blob=new Blob([text],{type});let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),600)}function reportText(){var el=$('sosx-reportPreview');var t=(el&&(el.innerText||el.textContent))||'';return t.replace(/\n{3,}/g,'\n\n')}function downloadReport(){var n=sosxReportMode==='ccr'?'MF_Customer_Contact_Report':sosxReportMode==='outcome'?'MF_Outcome_Report':sosxReportMode==='monthly'?'MF_Monthly_Summary':'MF_Weekly_Execution_Report';download(n+'_'+today.replaceAll('-','')+'.md',reportPlainText(),'text/markdown')}function exportState(){download('SAWARO26_SOS_ACTION_STATE_'+today.replaceAll('-','')+'.json',JSON.stringify(state,null,2),'application/json')}function importStateFile(ev){let f=ev.target.files?.[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let s=JSON.parse(r.result);if(!Array.isArray(s.actions))throw Error('bad');state=s;var moved=sosxEnsureCriticalCapacity(state.actions);state.sosx_capacity_policy='SOSX_CAP4_RUNTIME_V156';state.sosx_capacity_applied_at=today;store();renderAll();toast(moved?('Action State importiert · '+moved+' kritische Action(s) verteilt · max 4/Werktag'):'Action State importiert.')}catch(e){toast('Import fehlgeschlagen: ungültiges JSON.')}};r.readAsText(f);ev.target.value=''}function ics(d){return String(d||today).replaceAll('-','')}function escIcs(s){return String(s??'').replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}function exportICS(){let lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//SAWARO26//SOS AAA UI v3//DE'];state.actions.filter(activeA).forEach(a=>{lines.push('BEGIN:VEVENT',`UID:sawaro-${a.action_id}@sawaro26`,`DTSTAMP:${ics(today)}T080000Z`,`DTSTART;VALUE=DATE:${ics(a.due_date)}`,`SUMMARY:${escIcs(a.priority+' · '+a.account_name+' · '+a.title)}`,`DESCRIPTION:${escIcs('SOS mirror only. Master remains Action State. Next: '+a.next_step)}`,'END:VEVENT')});lines.push('END:VCALENDAR');download('SAWARO26_SOS_ACTIONS_MIRROR_'+today.replaceAll('-','')+'.ics',lines.join('\r\n'),'text/calendar')}function toast(msg){const el=document.getElementById('sosx-toast');if(!el)return;el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),2600)}document.addEventListener('keydown',e=>{if(e.key==='Escape')closeEditor()});$('sosx-editor').addEventListener('click',e=>{if(e.target===$('sosx-editor'))closeEditor()});function initSelect(id,vals,blank=false){let el=$(id);if(!el)return;el.innerHTML=(blank?['']:[]).concat(vals).map(v=>`<option value="${esc(v)}">${esc(v||'—')}</option>`).join('')}function init(){iconNav();initSelect('sosx-quickOutcome',outcomes.filter(Boolean));initSelect('sosx-fSegment',segments);initSelect('sosx-fType',riskTypes);initSelect('sosx-fPriority',priorities);initSelect('sosx-fStatus',statuses);initSelect('sosx-fOutcome',outcomes,true);try{SAWARO_BACKUP.init();}catch(e){}renderAll()}if(typeof iconNav==='function'){try{iconNav();}catch(e){}}
-window.SOSX_SAVE_WK_COMMENT=function(wk,val){try{state.weekly_comments=state.weekly_comments||{};state.weekly_comments[wk]=val;store();}catch(e){}};window.SOSX={getState:function(){return state;},auditCriticalCapacity:function(){var by={};state.actions.filter(function(a){return activeA(a)&&a.priority==='KRITISCH'}).forEach(function(a){by[a.due_date]=(by[a.due_date]||0)+1});return{limit:SOSX_CRIT_LIMIT,max:Object.keys(by).reduce(function(m,k){return Math.max(m,by[k])},0),byDate:by,violations:Object.keys(by).filter(function(k){return by[k]>SOSX_CRIT_LIMIT})}},ensureCriticalCapacity:function(){var moved=sosxEnsureCriticalCapacity(state.actions);if(moved)store();return moved},linkBackupFile:function(){return SAWARO_BACKUP.pickBackupFile();},downloadBackup:function(){return SAWARO_BACKUP.manualDownload();},setReportMode:setReportMode,sosExpectedByAccount:sosExpectedByAccount,sosExpectedTotal:sosExpectedTotal,actionExpectedValue:actionExpectedValue,actionProbability:actionProbability,printReport:printReport,copyReportText:copyReportText,downloadReportText:downloadReportText,reportPlainText:reportPlainText,buildCCRReport:buildCCRReport,buildOutcomeReport:buildOutcomeReport,buildMonthlySummary:buildMonthlySummary,cleanExternalReportText:cleanExternalReportText,actionCard:actionCard,sfEventUrl:sfEventUrl,activeA:activeA,addDays:addDays,buildLiveSignals:buildLiveSignals,chip:chip,closeEditor:closeEditor,cls:cls,convertSignal:convertSignal,createFollowUp:createFollowUp,dateObj:dateObj,dayLabel:dayLabel,download:download,downloadReport:downloadReport,dueWeek:dueWeek,editSignal:editSignal,empty:empty,emptySmall:emptySmall,enterApp:enterApp,esc:esc,escIcs:escIcs,eur:eur,exportICS:exportICS,exportState:exportState,iconNav:iconNav,ics:ics,importStateFile:importStateFile,init:init,initSelect:initSelect,iso:iso,labelFor:labelFor,late:late,load:load,monthLabel:monthLabel,moveCalendar:moveCalendar,nextId:nextId,openEditor:openEditor,renderAccount:renderAccount,renderActionDetail:renderActionDetail,renderAll:renderAll,renderCalendar:renderCalendar,renderDashboard:renderDashboard,renderInbox:renderInbox,renderKPIs:renderKPIs,renderReport:renderReport,renderSOS:renderSOS,renderWhere:renderWhere,reportText:reportText,sameMonth:sameMonth,saveEditor:saveEditor,saveQuickOutcome:saveQuickOutcome,saveThreadNote:saveThreadNote,selectAction:selectAction,selectCalendarDate:selectCalendarDate,showScreen:showScreen,sortA:sortA,store:store,tasksOn:tasksOn,toast:toast};
+function sosxCritCascade(due,prio,excludeId){if(sosxNormPriority(prio)!=='KRITISCH')return due;return sosxFindCriticalSlot(due||today,excludeId,state.actions)}function convertSignal(id){let s=radarSignals.find(x=>x.signal_id===id);if(!s)return;var alertId=srAlertId(s);if(state.actions.some(a=>a.source_signal_id===id)||srActionHasTrigger(alertId)){toast('Bereits im Kalender — kein doppelter Eintrag.','warn');return;}var dd=sosxCritCascade(s.due_date,s.priority,'');state.actions.push({action_id:nextId(),alert_id:alertId,source_signal_id:s.signal_id,account_id:s.account_id,account_name:s.account_name,main_segment:s.main_segment,title:s.title,reason:s.reason,next_step:s.next_step,owner:'MF',priority:s.priority,status:'PLANNED',due_date:dd,created_at:today,last_touch:today,follow_up_date:addDays(dd,3),commercial_impact_eur:s.commercial_impact_eur,risk_type:s.risk_type,outcome:'',outcome_note:'',progress:10});store();renderAll();toast(dd!==s.due_date?'Signal übernommen · KRITISCH-Limit (4/Tag): fällig '+dd:'Signal in SOS und Kalender übernommen.')}function editSignal(id){let s=radarSignals.find(x=>x.signal_id===id);if(!s)return;openEditor();$('sosx-fId').value='';$('sosx-fTitle').value=s.title;$('sosx-fAccountId').value=s.account_id;$('sosx-fAccountName').value=s.account_name;$('sosx-fSegment').value=s.main_segment;$('sosx-fType').value=s.risk_type;$('sosx-fPriority').value=s.priority;$('sosx-fStatus').value='PLANNED';$('sosx-fDue').value=s.due_date;$('sosx-fFollow').value=addDays(s.due_date,3);$('sosx-fImpact').value=s.commercial_impact_eur;$('sosx-fReason').value=s.reason;$('sosx-fNext').value=s.next_step}function openEditor(id){let a=id?state.actions.find(x=>x.action_id===id):null;$('sosx-editor').classList.add('open');$('sosx-editorTitle').textContent=a?'Action bearbeiten':'Neue Action';$('sosx-fId').value=a?.action_id||'';$('sosx-fTitle').value=a?.title||'';$('sosx-fOwner').value=a?.owner||'MF';$('sosx-fAccountId').value=a?.account_id||'';$('sosx-fAccountName').value=a?.account_name||'';$('sosx-fSegment').value=a?.main_segment||'Other';$('sosx-fType').value=a?.risk_type||'Opportunity';$('sosx-fPriority').value=a?.priority||'MITTEL';$('sosx-fStatus').value=a?.status||'PLANNED';(function(){var pv=Number(a?.progress||0);var s=$('sosx-fProgress');if(s)s.value=pv;var lbl=$('sosx-fProgressVal');if(lbl)lbl.textContent=pv;})();$('sosx-fDue').value=a?.due_date||today;$('sosx-fFollow').value=a?.follow_up_date||addDays(today,3);$('sosx-fImpact').value=a?.commercial_impact_eur||0;$('sosx-fReason').value=a?.reason||'';$('sosx-fNext').value=a?.next_step||'';$('sosx-fOutcome').value=a?.outcome||'';$('sosx-fOutcomeNote').value=a?.outcome_note||'';var _wk=$('sosx-fWeekly');if(_wk)_wk.checked=(a?a.includeInWeekly!==false:true)}function closeEditor(){$('sosx-editor').classList.remove('open')}function saveEditor(){let id=$('sosx-fId').value||nextId();let old=state.actions.find(a=>a.action_id===id);let a={action_id:id,source_signal_id:old?.source_signal_id||'',account_id:$('sosx-fAccountId').value||$('sosx-fAccountName').value.toUpperCase().replace(/[^A-Z0-9]+/g,'-'),account_name:$('sosx-fAccountName').value||'Scope',main_segment:$('sosx-fSegment').value,title:$('sosx-fTitle').value||'Untitled Action',reason:$('sosx-fReason').value||'Reason to be defined.',next_step:$('sosx-fNext').value||'Define concrete next step.',owner:$('sosx-fOwner').value||'MF',priority:$('sosx-fPriority').value,status:$('sosx-fStatus').value,due_date:$('sosx-fDue').value||today,created_at:old?.created_at||today,last_touch:today,follow_up_date:$('sosx-fFollow').value||'',commercial_impact_eur:Number($('sosx-fImpact').value||0),risk_type:$('sosx-fType').value,outcome:$('sosx-fOutcome').value,outcome_note:$('sosx-fOutcomeNote').value,progress:(function(){var st=$('sosx-fStatus').value;var sliderEl=$('sosx-fProgress');var manual=sliderEl?Number(sliderEl.value):NaN;if(st==='DONE')return 100;if(st==='CANCELLED')return 0;if(!isNaN(manual)&&manual>0)return manual;var def={PLANNED:10,IN_PROGRESS:50,WAITING_CUSTOMER:65,WAITING_INTERNAL:65,ESCALATED:75}[st];return def!=null?def:(old?.progress||0);})()};a.includeInWeekly=($('sosx-fWeekly')?$('sosx-fWeekly').checked:(old?old.includeInWeekly!==false:true));if(a.status==='DONE'&&!a.outcome){toast('DONE braucht ein Outcome.');return}var _od=a.due_date;if(activeA(a))a.due_date=sosxCritCascade(a.due_date,a.priority,id);state.actions=old?state.actions.map(x=>x.action_id===id?a:x):state.actions.concat(a);selectedActionId=a.action_id;selectedDate=a.due_date||selectedDate;calendarCursor=selectedDate;store();closeEditor();requestAnimationFrame(()=>$('sosx-editor').classList.remove('open'));renderAll();toast(a.due_date!==_od?'Gespeichert · KRITISCH-Limit (4/Tag): fällig '+a.due_date:'Action gespeichert.')}function saveQuickOutcome(){let a=state.actions.find(x=>x.action_id===selectedActionId);if(!a)return;if(!$('sosx-quickOutcome').value){toast('Outcome wählen.');return}a.status='DONE';a.progress=100;a.outcome=$('sosx-quickOutcome').value;a.outcome_note=$('sosx-quickOutcomeNote').value;a.last_touch=today;selectedDate=a.due_date||today;calendarCursor=selectedDate;store();showScreen('calendar');toast('Update erfasst und Action Detail geschlossen.')}function createFollowUp(id){let a=state.actions.find(x=>x.action_id===id);if(!a)return;var _fo=a.follow_up_date||addDays(today,3);var fdd=sosxCritCascade(_fo,a.priority,'');state.actions.push({...a,action_id:nextId(),source_signal_id:'',title:'Follow-up · '+a.title,reason:a.outcome_note||a.reason,next_step:'Follow-up durchführen und Ergebnis aktualisieren.',status:'PLANNED',due_date:fdd,created_at:today,last_touch:today,follow_up_date:addDays(fdd,6),outcome:'',outcome_note:'',progress:0});store();renderAll();toast(fdd!==_fo?'Follow-up · KRITISCH-Limit (4/Tag): fällig '+fdd:'Follow-up erstellt.')}function saveThreadNote(){state.thread_notes[$('sosx-accountSelect').value]=$('sosx-threadNote').value;store();toast('Thread Note gespeichert.')}function download(name,text,type='text/plain'){let blob=new Blob([text],{type});let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),600)}function reportText(){var el=$('sosx-reportPreview');var t=(el&&(el.innerText||el.textContent))||'';return t.replace(/\n{3,}/g,'\n\n')}function downloadReport(){var n=sosxReportMode==='ccr'?'MF_Customer_Contact_Report':sosxReportMode==='outcome'?'MF_Outcome_Report':sosxReportMode==='monthly'?'MF_Monthly_Summary':'MF_Weekly_Execution_Report';download(n+'_'+today.replaceAll('-','')+'.md',reportPlainText(),'text/markdown')}function exportState(){download('SAWARO26_SOS_ACTION_STATE_'+today.replaceAll('-','')+'.json',JSON.stringify(state,null,2),'application/json')}function importStateFile(ev){let f=ev.target.files?.[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let s=JSON.parse(r.result);if(!Array.isArray(s.actions))throw Error('bad');state=s;var moved=sosxEnforceCriticalCapacity();if(!moved)store();renderAll();toast(moved?('Action State importiert · '+moved+' kritische Action(s) verteilt · max 4/Werktag'):'Action State importiert.')}catch(e){toast('Import fehlgeschlagen: ungültiges JSON.')}};r.readAsText(f);ev.target.value=''}function ics(d){return String(d||today).replaceAll('-','')}function escIcs(s){return String(s??'').replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}function exportICS(){let lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//SAWARO26//SOS AAA UI v3//DE'];state.actions.filter(activeA).forEach(a=>{lines.push('BEGIN:VEVENT',`UID:sawaro-${a.action_id}@sawaro26`,`DTSTAMP:${ics(today)}T080000Z`,`DTSTART;VALUE=DATE:${ics(a.due_date)}`,`SUMMARY:${escIcs(a.priority+' · '+a.account_name+' · '+a.title)}`,`DESCRIPTION:${escIcs('SOS mirror only. Master remains Action State. Next: '+a.next_step)}`,'END:VEVENT')});lines.push('END:VCALENDAR');download('SAWARO26_SOS_ACTIONS_MIRROR_'+today.replaceAll('-','')+'.ics',lines.join('\r\n'),'text/calendar')}function toast(msg){const el=document.getElementById('sosx-toast');if(!el)return;el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),2600)}document.addEventListener('keydown',e=>{if(e.key==='Escape')closeEditor()});$('sosx-editor').addEventListener('click',e=>{if(e.target===$('sosx-editor'))closeEditor()});function initSelect(id,vals,blank=false){let el=$(id);if(!el)return;el.innerHTML=(blank?['']:[]).concat(vals).map(v=>`<option value="${esc(v)}">${esc(v||'—')}</option>`).join('')}function init(){iconNav();initSelect('sosx-quickOutcome',outcomes.filter(Boolean));initSelect('sosx-fSegment',segments);initSelect('sosx-fType',riskTypes);initSelect('sosx-fPriority',priorities);initSelect('sosx-fStatus',statuses);initSelect('sosx-fOutcome',outcomes,true);try{SAWARO_BACKUP.init();}catch(e){}renderAll()}if(typeof iconNav==='function'){try{iconNav();}catch(e){}}
+window.SOSX_SAVE_WK_COMMENT=function(wk,val){try{state.weekly_comments=state.weekly_comments||{};state.weekly_comments[wk]=val;store();}catch(e){}};window.SOSX={getState:function(){return state;},auditCriticalCapacity:function(){var by={};state.actions.filter(function(a){return activeA(a)&&sosxIsCritical(a)}).forEach(function(a){by[a.due_date]=(by[a.due_date]||0)+1});return{limit:SOSX_CRIT_LIMIT,max:Object.keys(by).reduce(function(m,k){return Math.max(m,by[k])},0),byDate:by,violations:Object.keys(by).filter(function(k){return by[k]>SOSX_CRIT_LIMIT})}},ensureCriticalCapacity:function(){return sosxEnforceCriticalCapacity()},linkBackupFile:function(){return SAWARO_BACKUP.pickBackupFile();},downloadBackup:function(){return SAWARO_BACKUP.manualDownload();},setReportMode:setReportMode,sosExpectedByAccount:sosExpectedByAccount,sosExpectedTotal:sosExpectedTotal,actionExpectedValue:actionExpectedValue,actionProbability:actionProbability,printReport:printReport,copyReportText:copyReportText,downloadReportText:downloadReportText,reportPlainText:reportPlainText,buildCCRReport:buildCCRReport,buildOutcomeReport:buildOutcomeReport,buildMonthlySummary:buildMonthlySummary,cleanExternalReportText:cleanExternalReportText,actionCard:actionCard,sfEventUrl:sfEventUrl,activeA:activeA,addDays:addDays,buildLiveSignals:buildLiveSignals,chip:chip,closeEditor:closeEditor,cls:cls,convertSignal:convertSignal,createFollowUp:createFollowUp,dateObj:dateObj,dayLabel:dayLabel,download:download,downloadReport:downloadReport,dueWeek:dueWeek,editSignal:editSignal,empty:empty,emptySmall:emptySmall,enterApp:enterApp,esc:esc,escIcs:escIcs,eur:eur,exportICS:exportICS,exportState:exportState,iconNav:iconNav,ics:ics,importStateFile:importStateFile,init:init,initSelect:initSelect,iso:iso,labelFor:labelFor,late:late,load:load,monthLabel:monthLabel,moveCalendar:moveCalendar,nextId:nextId,openEditor:openEditor,renderAccount:renderAccount,renderActionDetail:renderActionDetail,renderAll:renderAll,renderCalendar:renderCalendar,renderDashboard:renderDashboard,renderInbox:renderInbox,renderKPIs:renderKPIs,renderReport:renderReport,renderSOS:renderSOS,renderWhere:renderWhere,reportText:reportText,sameMonth:sameMonth,saveEditor:saveEditor,saveQuickOutcome:saveQuickOutcome,saveThreadNote:saveThreadNote,selectAction:selectAction,selectCalendarDate:selectCalendarDate,showScreen:showScreen,sortA:sortA,store:store,tasksOn:tasksOn,toast:toast};
 
 window.SOSX.migrateLegacy=function(){
   try{
@@ -10531,7 +10663,7 @@ window.SOSX.migrateLegacy=function(){
     try{sosxEnsureCriticalCapacity(mapped)}catch(e){}localStorage.setItem(MASTER,JSON.stringify({version:'4.0-migrated',created_at:td,updated_at:td,actions:mapped,thread_notes:{},sosx_capacity_policy:'SOSX_CAP4_RUNTIME_V156',sosx_capacity_applied_at:td}));
   }catch(e){console.warn('SOSX migrateLegacy',e);}
 };
-window.SOSX.open=function(){try{window.SOSX.migrateLegacy()}catch(e){}var o=document.getElementById('sosx-overlay');if(!o)return;var app=document.getElementById('sc-app');if(app&&app.classList.contains('active'))window.__sosx_return_screen='sc-app';o.classList.add('open');var ex=document.getElementById('sosx-exit');if(ex)ex.classList.add('show');document.body.style.overflow='hidden';try{var moved=sosxEnsureCriticalCapacity(state.actions);state.sosx_capacity_policy='SOSX_CAP4_RUNTIME_V156';state.sosx_capacity_applied_at=today;if(moved)store();var first=!window.__sosx_inited;if(first){if(typeof init==='function')init();window.__sosx_inited=true}var g=document.getElementById('sosx-gate');if(g)g.classList.add('hide');var sa=document.getElementById('sosx-app');if(sa)sa.classList.remove('hide');if(!first)renderAll();try{hydrateIcons(o)}catch(e){}if(moved)toast(moved+' kritische Action(s) automatisch verteilt · max 4/Werktag')}catch(e){console.warn('SOSX open',e)}};
+window.SOSX.open=function(){try{window.SOSX.migrateLegacy()}catch(e){}var o=document.getElementById('sosx-overlay');if(!o)return;var app=document.getElementById('sc-app');if(app&&app.classList.contains('active'))window.__sosx_return_screen='sc-app';o.classList.add('open');var ex=document.getElementById('sosx-exit');if(ex)ex.classList.add('show');document.body.style.overflow='hidden';try{var moved=sosxEnforceCriticalCapacity();var first=!window.__sosx_inited;if(first){if(typeof init==='function')init();window.__sosx_inited=true}var g=document.getElementById('sosx-gate');if(g)g.classList.add('hide');var sa=document.getElementById('sosx-app');if(sa)sa.classList.remove('hide');if(!first)renderAll();try{hydrateIcons(o)}catch(e){}if(moved)toast(moved+' kritische Action(s) automatisch verteilt · max 4/Werktag')}catch(e){console.warn('SOSX open',e)}};
 window.SOSX.close=function(){var o=document.getElementById('sosx-overlay');if(!o)return;o.classList.remove('open');var ex=document.getElementById('sosx-exit');if(ex)ex.classList.remove('show');document.body.style.overflow='';var app=document.getElementById('sc-app'),start=document.getElementById('sc-start');if(app)app.classList.add('active');if(start)start.classList.remove('active');try{if(typeof renderHub==='function')renderHub()}catch(e){}};
 
 
@@ -11588,7 +11720,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
 <script>
 /* ============================================================
    SAWARO26 · TERRITORY HEALTH  —  Command-Overview
-   Farbe = ENTWICKLUNG YTD  FY26 vs 2025 (gleicher Zeitraum)
+   Farbe = ENTWICKLUNG VISIBLE 2026 vs. 2025-CUTOFF
    Quelle: account.snapshotBenchmark  (same-cutoff YTD mapped,
            dieselbe Datenbasis wie Reports)  ->  .pct
    gruen >= -12.5% | gelb -12.5..-25% | rot <= -25% | aus Null & FY26>0 = gruen
@@ -11603,7 +11735,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
   function seg_(a){return (a&&(a.mainSegment||a.segment||a.main_segment))||'';}
   function ctry_(a){return (a&&a.country)||'';}
   function rt(a){try{return window.accountRuntimeStatus?window.accountRuntimeStatus(a):null;}catch(e){return null;}}
-  /* Entwicklung YTD (FY26 sichtbar vs 2025 gleicher Zeitraum) -> Bucket */
+  /* Entwicklung: canonical Visible 2026 vs. historical 2025 cutoff -> Bucket */
   function dev(a,rs){
     var sb=rs&&rs.snapshotBenchmark;        // kanonisch, Laufzeit aus rev[] -> ueberlebt Slim
     var fc=rs&&rs.fc;
@@ -11664,7 +11796,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
   var ROWS=[];
   function thk(l,v,c){return '<div class="th-k'+(c?' '+c:'')+'"><i>'+l+'</i><b>'+v+'</b></div>';}
   function tipHtml(r){var dv=r.dv;var lbl={ok:'W\u00E4chst / stabil',warn:'R\u00FCckl\u00E4ufig',err:'Stark r\u00FCckl\u00E4ufig',none:'Kein Umsatz'}[dv.b];
-    var ytd=(dv.basis==='ytd');var lc=ytd?'YTD 2026':'FY26 Forecast';var lp=ytd?'YTD 2025 (gl. Zeitraum)':'Umsatz 2025 (Jahr)';
+    var ytd=(dv.basis==='ytd');var lc=ytd?'Visible 2026':'FY26 Forecast';var lp=ytd?'2025 Cutoff (gl. Zeitraum)':'Umsatz 2025 (Jahr)';
     return '<div class="th-tn">'+esc(name_(r.a))+'</div>'+
       '<div class="th-tr">'+esc(seg_(r.a))+(ctry_(r.a)?' \u00B7 '+esc(ctry_(r.a)):'')+'</div>'+
       '<div class="th-tr">'+lc+': <b>'+eur(dv.cur)+'</b></div>'+
@@ -11690,7 +11822,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
     box.innerHTML=
       '<p class="th-eyebrow">SAWARO26 \u00B7 TERRITORY HEALTH</p>'+
       '<div class="th-head"><div><h2 class="th-title">Territory Health</h2>'+
-      '<p class="th-sub">Eine Node = ein Kunde \u00B7 Farbe = Entwicklung YTD FY26 vs. 2025 (gleicher Zeitraum) \u00B7 sortiert nach Umsatz</p></div>'+
+      '<p class="th-sub">Eine Node = ein Kunde \u00B7 Farbe = Visible 2026 (YTD + Open OB) vs. 2025-Cutoff \u00B7 sortiert nach Umsatz</p></div>'+
       '<div class="th-legend"><span class="th-li"><span class="th-dot g"></span>W\u00E4chst / stabil (\u2265 \u221212,5 %)</span>'+
       '<span class="th-li"><span class="th-dot a"></span>R\u00FCckl\u00E4ufig (\u221212,5 bis \u221225 %)</span>'+
       '<span class="th-li"><span class="th-dot r"></span>Stark (\u2264 \u221225 %)</span>'+
@@ -12751,11 +12883,11 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
 <script id="sawaro-v134-commandroom-js">
 (function(){
   'use strict';
-  var BUILD='v165';
-  var BUILD_LABEL='SAWARO26 COMMANDER D26 · v165 ACCOUNT MODAL + REPORT SOURCE FIX';
+  var BUILD='v167';
+  var BUILD_LABEL='SAWARO26 COMMANDER D26 · v167 CANONICAL TRUTH CONTRACT';
   var BUILD_DATE='2026-06-08';
   var OWNER='Ing. Manfred Foissner';
-  var PATCH_NAME='Account Modal + Report Source Fix';
+  var PATCH_NAME='Canonical Truth Contract';
 
   function byId(id){return document.getElementById(id)}
   function q(sel,root){return (root||document).querySelector(sel)}
@@ -12778,7 +12910,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
   function safeForecast(a){
     try{if(typeof accountForecastBreakdownFY26==='function')return accountForecastBreakdownFY26(a)||{}}catch(e){}
     var rev=(a&&a.rev)||[];
-    var y25=num(rev[11]), to26=num(a&&a.turnoverYTD26), open=num(a&&a.orderbookOpen26), visible=to26+open||num(a&&a.fy26Visible)||num(rev[12]);
+    var y25=num(rev[11]), truth=(typeof getAccountTruth==='function'?getAccountTruth(a):{monthlyUpdatedYtdTurnover:num(a&&a.turnoverYTD26),monthlyUpdatedOpenOrderbook:num(a&&a.orderbookOpen26),visible2026:num(a&&a.turnoverYTD26)+num(a&&a.orderbookOpen26)}), to26=num(truth.monthlyUpdatedYtdTurnover), open=num(truth.monthlyUpdatedOpenOrderbook), visible=num(truth.visible2026);
     return {y25:y25,forecast:Math.max(visible,y25*.65),ob26:visible,delta25:Math.max(visible,y25*.65)-y25,deltaPct25:y25?Math.max(visible,y25*.65)/y25-1:null,coverage:0,confidence:.45,businessType:'Fallback'};
   }
   function safeRuntime(a){
@@ -13075,7 +13207,7 @@ var GGB_BATCH1=[{"k":"200003.0","n":"AICHELIN GES.M.B.H.","c":"AT","ct":"MÖDLIN
 
 
 <!--
-SAWARO26 v165 ACCOUNT MODAL + REPORT SOURCE FIX · PATCH CANDIDATE
+SAWARO26 v166 CAP4 RISK ALERT FIX · PATCH CANDIDATE
 Baseline runtime: SAWARO26_COMMANDER_v156_SOSX_RUNTIME_FLOW_FIX.html · SHA-256 88c9651a7e6fcf921034a5a1328c1d4764fb0943579bebb2c0b79d0b11dc2d9c
 Report/card donor: Ok SAWARO26_COMMANDER_v158_SOSX_OUTCOME_NOTE_CARDS.html · SHA-256 24f717d2501699bd51b0ee7061d135311384f928372d8f4ca881986e9de127f8
 Changed: unified report presentation, Outcome Note cards, external-clean report exports, explicit outcome logic, dynamic report filenames, monthly no-data state.
@@ -13181,8 +13313,8 @@ Rollback: SAWARO26_COMMANDER_v156_SOSX_RUNTIME_FLOW_FIX.html
 </script>
 
 <!--
-SAWARO26 v165 ACCOUNT MODAL + REPORT SOURCE FIX
-Baseline: v159 Runtime + Report Merge
+SAWARO26 v166 CAP4 RISK ALERT FIX
+Baseline: v165 Account Modal + Report Source Fix
 Scope:
 - Intake keeps explicit SOS + Calendar transfer.
 - Existing SOS/action cards remain unchanged.
@@ -13191,11 +13323,34 @@ Scope:
 -->
 
 <!--
-SAWARO26 v165 CHANGELOCK
-Baseline: v164 Kalender -> Salesforce Direct
+SAWARO26 v166 CHANGELOCK
+Baseline: v165 Account Modal + Report Source Fix
 Changed: customer modal z-layer/sticky close; explicit DETAIL entry on existing account rows/cards; Reporting scope ignores global master search; Strategic Review uses all loaded accounts and its own composer territory scope.
 Protected and untouched: Truth/import, turnover/orderbook/LRP, forecast model, SOS/calendar cap-4, Salesforce desktop link, SOS reports, backup/restore.
-Rollback: use v164 baseline.
+Rollback: use v165 baseline.
+-->
+
+<!-- SAWARO26 v166 CAP4 RISK ALERT FIX
+Baseline: v165 Account Modal + Report Source Fix
+Changed only: persisted priority normalization; critical-cap classifier; guarded enforcement in real calendar renderer/open/import; capacity audit/KPI alignment.
+Protected and untouched: Truth/import, turnover/orderbook/LRP, forecast, reports, account modal, Salesforce desktop Event link, SOS exit/runtime navigation.
+Rule: maximum 4 active critical actions per workday; overflow cascades to following workdays.
+-->
+<!--
+SAWARO26 v167 CANONICAL TRUTH CONTRACT
+Baseline: NUR_DIESE_DATEI_SAWARO26_v166_CAP4_RISK_ALERT_FIX.html
+Changed:
+- canonical source_type aliases and contract
+- one getAccountTruth() derivation for YTD, Open OB and Visible 2026
+- strict same-snapshot gate for current turnover/orderbook
+- historical 2026 rows excluded from active current truth
+- portfolio, forecast, benchmark, heatmap, LRP target layer, RADAR and article/account outputs bound to canonical truth
+Protected / not redesigned:
+- SOS/CAP4 and Salesforce Event flow
+- account modal layout
+- report layouts
+- backup/restore and navigation
+Formula: visible_2026 = monthly_updated_ytd_turnover + monthly_updated_open_orderbook
 -->
 </body>
 </html>
