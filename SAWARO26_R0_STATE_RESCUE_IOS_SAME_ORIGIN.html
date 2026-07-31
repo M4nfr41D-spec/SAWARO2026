@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>SAWARO26 R0 State Rescue · iOS</title>
+  <style>
+    :root{color-scheme:dark;--bg:#08110f;--card:#0f1d19;--line:#2a4139;--text:#edf5f1;--muted:#a9bbb3;--accent:#d8b765;--ok:#8ed8ae;--warn:#f0c56f;--bad:#ff9b9b}
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#07100e,#0b1713);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;padding:max(20px,env(safe-area-inset-top)) 18px max(28px,env(safe-area-inset-bottom))}
+    main{max-width:720px;margin:0 auto}
+    .eyebrow{letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-size:.76rem;font-weight:700}
+    h1{font-size:clamp(1.8rem,7vw,2.7rem);line-height:1.08;margin:.45rem 0 1rem}
+    p{color:var(--muted)}
+    .card{background:rgba(15,29,25,.92);border:1px solid var(--line);border-radius:18px;padding:18px;margin:16px 0;box-shadow:0 14px 45px rgba(0,0,0,.25)}
+    .facts{display:grid;grid-template-columns:1fr auto;gap:9px 14px;margin:0}
+    .facts dt{color:var(--muted)}.facts dd{margin:0;text-align:right;word-break:break-all}
+    button{width:100%;border:0;border-radius:14px;padding:16px 18px;font-size:1rem;font-weight:800;background:linear-gradient(135deg,#d8b765,#f0d892);color:#16120a;box-shadow:0 8px 24px rgba(216,183,101,.22)}
+    button:disabled{opacity:.55;box-shadow:none}
+    .status{margin-top:14px;padding:12px 14px;border-radius:12px;background:#0a1512;border:1px solid var(--line);white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+    .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+    ol{padding-left:1.25rem;color:var(--muted)}
+    strong{color:var(--text)}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">R0 · Forensic State Rescue</div>
+  <h1>SAWARO26 iPhone State Export</h1>
+  <p>Diese Seite liest ausschließlich SAWARO26-Daten aus dem lokalen Browser-Speicher und erzeugt eine JSON-Sicherungsdatei. Sie verändert, migriert oder löscht nichts.</p>
+
+  <section class="card">
+    <strong>Wichtig: Same-Origin-Regel</strong>
+    <ol>
+      <li>Diese Datei als zusätzliche Datei in <strong>dieselbe GitHub-Pages-Site</strong> hochladen, auf der SAWARO26 läuft.</li>
+      <li>Nicht direkt aus der Dateien-App öffnen.</li>
+      <li>Die veröffentlichte Rescue-Seite in demselben Safari öffnen, in dem SAWARO26 verwendet wurde.</li>
+      <li>Dann unten auf <strong>State exportieren</strong> tippen.</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <dl class="facts">
+      <dt>Origin</dt><dd id="origin">–</dd>
+      <dt>LocalStorage gesamt</dt><dd id="count">–</dd>
+      <dt>SAWARO-Schlüssel erkannt</dt><dd id="sawaroCount">–</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <button id="exportBtn" type="button">State exportieren / teilen</button>
+    <div id="status" class="status">Bereit. Noch keine Daten gelesen.</div>
+  </section>
+
+  <section class="card">
+    <strong>Datenschutz</strong>
+    <p>Die exportierte Datei kann Kunden-, Kontakt-, Maßnahmen- und Notizdaten enthalten. Sie bleibt lokal auf deinem Gerät, bis du sie bewusst teilst.</p>
+  </section>
+</main>
+
+<script>
+/* SAWARO_RECOVERY_MARKER:R0_IOS_RESCUE_BEGIN | READ_ONLY | SAME_ORIGIN_ONLY */
+(function(){
+  'use strict';
+
+  const explicitKeys = [
+    'deva_warroom_v37_injection_accounts',
+    'deva_warroom_v40_truth_meta',
+    'sawaro26_lrp_targets_v1',
+    'sawaro26_native_sos_v1',
+    'SAWARO26_SOS_MASTER_STATE_V1',
+    'SAWARO26_SOS_MASTER_STATE_V1_REDUNDANT',
+    'SAWARO26_SOS_AAA_MOBILE_FIRST_UI_V4_STATE',
+    'SAWARO26_SOS_ACTIONS_MASTER_V2',
+    'SAWARO26_SOS_ACTIONS_MASTER_V1',
+    'SAWARO26_NATIVE_XSOS_ACTIONS_V2',
+    'SAWARO26_NATIVE_SOS_ACTIONS_V1',
+    'SAWARO26_LEADS_V1',
+    'SAWARO26_V88_MAIN_MODE',
+    'SAWARO26_SOS_BACKUP_LINKED'
+  ];
+  const prefixPattern = /^(SAWARO26_|sawaro26_|deva_warroom_)/i;
+  const $ = id => document.getElementById(id);
+  const status = (text, cls='') => { $('status').textContent = text; $('status').className = 'status ' + cls; };
+  const safeClone = value => { try{return JSON.parse(JSON.stringify(value));}catch(e){return {clone_error:String(e&&e.message||e)};} };
+  const summarize = value => {
+    if (Array.isArray(value)) return {kind:'array',count:value.length};
+    if (!value || typeof value!=='object') return {kind:typeof value,value};
+    const summary={kind:'object',keys:Object.keys(value).sort()};
+    if (Array.isArray(value.actions)) summary.actions=value.actions.length;
+    if (Array.isArray(value.accounts)) summary.accounts=value.accounts.length;
+    if (Array.isArray(value.targets)) summary.targets=value.targets.length;
+    if (Array.isArray(value.leads)) summary.leads=value.leads.length;
+    if (value.thread_notes && typeof value.thread_notes==='object') summary.thread_notes=Object.keys(value.thread_notes).length;
+    if (value.version!=null) summary.version=value.version;
+    if (value.updated_at!=null) summary.updated_at=value.updated_at;
+    return summary;
+  };
+  const sha256 = async text => {
+    const bytes = new TextEncoder().encode(String(text));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  };
+  const discoveredKeys = () => {
+    const all = Array.from({length:localStorage.length},(_,i)=>localStorage.key(i)).filter(Boolean);
+    return Array.from(new Set(explicitKeys.concat(all.filter(k=>prefixPattern.test(k))))).sort();
+  };
+  const refreshFacts = () => {
+    const keys=discoveredKeys();
+    $('origin').textContent=location.origin;
+    $('count').textContent=String(localStorage.length);
+    $('sawaroCount').textContent=String(keys.filter(k=>localStorage.getItem(k)!==null).length);
+  };
+
+  async function buildPayload(){
+    const keys=discoveredKeys();
+    const stores={};
+    for(const key of keys){
+      const raw=localStorage.getItem(key);
+      if(raw===null){stores[key]={present:false};continue;}
+      let parsed=null,parseError=null;
+      try{parsed=JSON.parse(raw);}catch(e){parseError=String(e&&e.message||e);}
+      stores[key]={
+        present:true,
+        raw_bytes:new TextEncoder().encode(raw).length,
+        raw_sha256:await sha256(raw),
+        json_valid:!parseError,
+        parse_error:parseError,
+        summary:parseError?{kind:'raw-string'}:summarize(parsed),
+        raw,
+        parsed:parseError?null:parsed
+      };
+    }
+    let sosxRuntime=null;
+    try{if(window.SOSX&&typeof window.SOSX.getState==='function')sosxRuntime=safeClone(window.SOSX.getState());}catch(e){sosxRuntime={read_error:String(e&&e.message||e)};}
+    const runtime={
+      href:location.href,
+      origin:location.origin,
+      user_agent:navigator.userAgent,
+      document_title:document.title,
+      build_meta:(document.querySelector('meta[name="sawaro-build"]')||{}).content||null,
+      config_version:(window.CONFIG&&window.CONFIG.VERSION)||null,
+      sawaro_build_id:window.SAWARO_BUILD_ID||null,
+      state:safeClone(window.STATE||null),
+      sosx_state:sosxRuntime
+    };
+    const payload={
+      schema:'SAWARO26_R0_STATE_RESCUE_V1_IOS',
+      generated_at:new Date().toISOString(),
+      read_only:true,
+      origin:location.origin,
+      local_storage_total_keys:localStorage.length,
+      captured_keys:keys,
+      stores,
+      runtime,
+      runtime_sha256:await sha256(JSON.stringify(runtime)),
+      warnings:[
+        'Forensic read-only export; do not import directly into SAWARO26.',
+        'This export only sees browser state on this exact device, browser and origin.',
+        'Keep private: may contain customer, contact, action and note data.'
+      ]
+    };
+    return payload;
+  }
+
+  async function exportPayload(){
+    const btn=$('exportBtn');
+    btn.disabled=true;
+    status('Lese lokale SAWARO26-Stores …','warn');
+    try{
+      const payload=await buildPayload();
+      const present=Object.values(payload.stores).filter(v=>v.present).length;
+      const json=JSON.stringify(payload,null,2);
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      const filename='SAWARO26_R0_STATE_RESCUE_IOS_'+stamp+'.json';
+      const file=new File([json],filename,{type:'application/json'});
+
+      if(navigator.canShare && navigator.canShare({files:[file]}) && navigator.share){
+        await navigator.share({files:[file],title:'SAWARO26 R0 State Rescue',text:'Read-only forensic state export'});
+        status('Export erstellt und über das iOS-Teilen-Menü bereitgestellt. Gefundene Stores: '+present,'ok');
+      }else{
+        const url=URL.createObjectURL(file);
+        const a=document.createElement('a');
+        a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),3000);
+        status('Export als Download erzeugt. Gefundene Stores: '+present,'ok');
+      }
+    }catch(e){
+      if(e && e.name==='AbortError') status('Teilen wurde abgebrochen. Es wurden keine Daten verändert.','warn');
+      else status('Exportfehler: '+String(e&&e.message||e),'bad');
+    }finally{
+      btn.disabled=false;
+      refreshFacts();
+    }
+  }
+
+  $('exportBtn').addEventListener('click',exportPayload);
+  refreshFacts();
+})();
+/* SAWARO_RECOVERY_MARKER:R0_IOS_RESCUE_END */
+</script>
+</body>
+</html>
